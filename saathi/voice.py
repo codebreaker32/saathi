@@ -26,6 +26,25 @@ from pathlib import Path
 SAMPLE_RATE = 16000          # Polly 'pcm' is 16-bit signed, mono
 CACHE = Path(__file__).resolve().parent.parent / ".voice-cache"
 
+def _load_dotenv() -> None:
+    """Read .env if present, without adding a dependency.
+
+    Existing environment always wins, so a deployed box that sets the variable
+    for real is never overridden by a file someone left in the repo.
+    """
+    f = Path(__file__).resolve().parent.parent / ".env"
+    if not f.exists():
+        return
+    for line in f.read_text().splitlines():
+        line = line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        k, _, v = line.partition("=")
+        os.environ.setdefault(k.strip(), v.strip().strip('"\''))
+
+
+_load_dotenv()
+
 PROFILE = os.environ.get("SAATHI_AWS_PROFILE", "")
 """Which AWS profile to sign with. Empty means standard credential resolution
 -- env vars, an `aws login` session, or an instance role once deployed. Naming
