@@ -2,92 +2,97 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 
-// Same origin in production. NEXT_PUBLIC_API only for split-server dev.
 const API = process.env.NEXT_PUBLIC_API ?? "";
-/* The detector's families, said the way a person would say them. Nobody
-   outside this codebase knows what CONTINGENCY means, and a bar labelled
-   with it tells a user nothing about whether to trust the thing. */
+
+/* Fixed order, always all six positions, so a dark dot means "this has not
+   fired" rather than "this does not exist". */
 const CHECKS = [
-  { id: "SYNTHESIS",   name: "Real voice",     asks: "Does the voice sound recorded by a person, or generated?" },
-  { id: "IDENTITY",    name: "Same person",    asks: "Is this still whoever was speaking a moment ago?" },
-  { id: "REPETITION",  name: "Said it before", asks: "Have we heard this exact sentence on an earlier call?" },
-  { id: "CONTINGENCY", name: "Replying to us", asks: "Does their answer depend on what Saathi actually said?" },
-  { id: "DUPLEX",      name: "Takes turns",    asks: "Do they stop when interrupted, the way people do?" },
+  { id: "SYNTHESIS",   name: "The voice sounds like a person, not a generated one" },
+  { id: "IDENTITY",    name: "Still the same voice as a moment ago" },
+  { id: "REPETITION",  name: "They haven't said this exact line on a previous call" },
+  { id: "CONTINGENCY", name: "Their answer depends on what Saathi actually said" },
+  { id: "DUPLEX",      name: "They stop when interrupted, the way people do" },
 ];
-const SCRIPTED = new Set(["SYNTHESIS", "IDENTITY"]);
+/* Verified across all 8 scenarios: IDENTITY never fires, and SYNTHESIS is a
+   scripted stand-in. Rendering either as a normal dot would be a quiet lie. */
+const UNMEASURED = new Set(["SYNTHESIS", "IDENTITY"]);
 
-const VERDICT: Record<string, { say: string; tone: string }> = {
-  FETCH:     { say: "That's a person",  tone: "var(--success)" },
-  MACHINE:   { say: "Still a machine",  tone: "var(--faint)" },
-  UNDECIDED: { say: "Not sure yet",     tone: "var(--foreground)" },
-  LISTENING: { say: "Listening",        tone: "var(--faint)" },
+const SPEAKER: Record<string, string> = {
+  menu: "Recorded menu", queue: "Recorded message",
+  bot: "Whoever answered", rep: "Whoever answered", saathi: "Saathi",
 };
 
-type Frame = Record<string, any>;
-type Stage = "brief" | "understanding" | "permission" | "calling" | "summary";
+const STATUS: Record<string, string> = {
+  dialling: "Dialling.",
+  menu: "Going through the menu.",
+  hold: "On hold.",
+  assessing: "Someone is speaking. Checking whether they're a person.",
+  person: "A person is on the line.",
+  verify: "They want to verify your identity. That part is yours.",
+  ended: "Call finished.",
+};
 
-const clock = (ms: number) => {
+const mmss = (ms: number) => {
   const s = Math.max(0, Math.floor(ms / 1000));
-  return `${String(Math.floor(s / 60)).padStart(2, "0")}:${String(s % 60).padStart(2, "0")}`;
-};
-
-const VOICE: Record<string, { label: string; tone: string }> = {
-  menu:   { label: "Recorded menu",   tone: "var(--faint)" },
-  queue:  { label: "Recorded message", tone: "var(--faint)" },
-  bot:    { label: "Ava",             tone: "var(--warning)" },
-  rep:    { label: "Agent",           tone: "var(--success)" },
-  saathi: { label: "Saathi",          tone: "var(--primary)" },
-};
-
-/* One plain sentence for whatever is happening, so the screen is readable
-   without knowing anything about how it works. */
-const EXPLAIN: Record<string, string> = {
-  Dialling: "Ringing the company now.",
-  "Working through the menu": "Listening to the whole menu before pressing anything — the option you want is often last.",
-  "On hold": "Waiting. You can put your phone down; Saathi will ring you when a person picks up.",
-  "Someone is speaking": "Someone answered. Saathi is checking whether it's a person or a recording.",
-  "Fetching you": "A person is on the line and Saathi is calling you now.",
-  "Handed to you": "They asked to verify your identity, so Saathi stepped back. Only you can answer that.",
-  "Back on hold": "You said that wasn't a person. Saathi is waiting again and won't ring you twice.",
+  return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`;
 };
 
 export default function Page() {
-  const [stage, setStage] = useState<Stage>("brief");
-  const [problem, setProblem] = useState(
-    "My Zomato order was two hours late and they charged me full price, order 4471, rs 499",
-  );
-  const [understood, setUnderstood] = useState<any>(null);
-  const [busy, setBusy] = useState(false);
-  const [scenario, setScenario] = useState("");
-  const [speed, setSpeed] = useState(10);
+  const [screen, setScreen] = useState<"table" | "call" | "why" | "receipt">("table");
 
+  const [problem, setProblem] = useState(
+    "My Zomato order was two hours late and they charged me full price, order 4471, rs 499");
+  const [understood, setUnderstood] = useState<any>(null);
+  const [scenario, setScenario] = useState("");
   const [mandateText, setMandateText] = useState("");
   const [mandate, setMandate] = useState<any>(null);
+  const [busy, setBusy] = useState(false);
+  const speed = 10;
 
-  const [frames, setFrames] = useState<Frame[]>([]);
+  const [frames, setFrames] = useState<any[]>([]);
   const [callMs, setCallMs] = useState(0);
-  const [det, setDet] = useState<Frame | null>(null);
-  const [phase, setPhase] = useState("Dialling");
+  const [det, setDet] = useState<any>(null);
+  const [status, setStatus] = useState("dialling");
   const [summoned, setSummoned] = useState(false);
-  const [mode, setMode] = useState<string | null>(null);
-  const [ended, setEnded] = useState<Frame | null>(null);
+  const [ended, setEnded] = useState<any>(null);
   const [demoted, setDemoted] = useState(false);
-  const [details, setDetails] = useState(false);
+  const [muted, setMuted] = useState(false);
+  const [rang, setRang] = useState(false);
 
   const es = useRef<EventSource | null>(null);
   const audio = useRef<HTMLAudioElement | null>(null);
-  const muted = useRef(false);
-  const log = useRef<HTMLDivElement | null>(null);
+  const ctx = useRef<AudioContext | null>(null);
+  const mute = useRef(false);
+  const tape = useRef<HTMLDivElement | null>(null);
 
-  useEffect(() => { log.current?.scrollTo({ top: 1e9, behavior: "smooth" }); }, [frames]);
+  useEffect(() => { tape.current?.scrollTo({ top: 1e9, behavior: "smooth" }); }, [frames, screen]);
   useEffect(() => () => { es.current?.close(); audio.current?.pause(); }, []);
 
+  /* The summon tone, synthesised rather than fetched, so [Test the ring] works
+     before a call exists and needs no asset. */
+  const ring = useCallback(() => {
+    try {
+      const C = ctx.current ?? new AudioContext();
+      ctx.current = C;
+      if (C.state === "suspended") C.resume();
+      const t0 = C.currentTime;
+      [0, 0.45].forEach(off => {
+        const o = C.createOscillator(), g = C.createGain();
+        o.frequency.value = 660; o.type = "sine";
+        g.gain.setValueAtTime(0, t0 + off);
+        g.gain.linearRampToValueAtTime(0.22, t0 + off + 0.04);
+        g.gain.linearRampToValueAtTime(0, t0 + off + 0.34);
+        o.connect(g).connect(C.destination); o.start(t0 + off); o.stop(t0 + off + 0.4);
+      });
+      if (navigator.vibrate) navigator.vibrate([90, 70, 90]);
+    } catch {}
+  }, []);
+
   const say = useCallback((id: string) => {
-    if (muted.current) return;
+    if (mute.current) return;
     audio.current?.pause();
     const a = new Audio(`${API}/api/audio/${id}.wav`);
-    audio.current = a;
-    a.play().catch(() => {});
+    audio.current = a; a.play().catch(() => {});
   }, []);
 
   async function understand() {
@@ -99,54 +104,40 @@ export default function Page() {
       }).then(x => x.json());
       setUnderstood(r);
       if (r.scenarios?.length) setScenario(r.scenarios[0].id);
-      setStage("understanding");
     } finally { setBusy(false); }
   }
 
   async function checkMandate() {
     setBusy(true);
     try {
-      const r = await fetch(`${API}/api/mandate`, {
+      setMandate(await fetch(`${API}/api/mandate`, {
         method: "POST", headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ text: mandateText }),
-      }).then(x => x.json());
-      setMandate(r);
+      }).then(x => x.json()));
     } finally { setBusy(false); }
   }
 
-  async function placeCall() {
+  function call() {
+    ctx.current = ctx.current ?? new AudioContext();   // the one resume gesture
     es.current?.close();
     setFrames([]); setDet(null); setEnded(null); setSummoned(false);
-    setMode(null); setDemoted(false); setCallMs(0); setPhase("Dialling");
-    muted.current = false;
-    setStage("calling");
+    setDemoted(false); setCallMs(0); setStatus("dialling"); setRang(false);
+    mute.current = false; setMuted(false);
+    setScreen("call");
 
-    // Everything the user typed travels as ONE brief, built through the
-    // whitelist. It is the only channel into what Saathi says out loud.
-    const { session } = await fetch(`${API}/api/call`, {
-      method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        scenario, speed,
-        playbook: understood?.playbook,
-        problem,
-        facts: { registered_phone: "98765 41182", ...(understood?.facts ?? {}) },
-        mandate: mandate?.mandate ?? {},
-      }),
-    }).then(r => r.json()).catch(() => ({ session: "" }));
-
-    const src = new EventSource(`${API}/api/events?session=${session}`);
+    const src = new EventSource(
+      `${API}/api/events?scenario=${scenario}&speed=${speed}`);
     es.current = src;
     src.onmessage = e => {
-      const f: Frame = JSON.parse(e.data);
-      setCallMs(f.call_ms);
-      setFrames(p => [...p, f]);
+      const f = JSON.parse(e.data);
+      setCallMs(f.call_ms); setFrames(p => [...p, f]);
       if (f.type === "detector") setDet(f);
-      if (f.type === "menu" || f.type === "dtmf") setPhase("Working through the menu");
-      if (f.type === "hold" || f.type === "announcement") setPhase("On hold");
-      if (f.type === "utterance" || f.type === "probe") setPhase("Someone is speaking");
-      if (f.type === "summon") { setSummoned(true); setPhase("Fetching you"); }
-      if (f.type === "handoff") { setSummoned(true); setPhase("Handed to you"); }
-      if (f.type === "ended") { setEnded(f); setStage("summary"); src.close(); }
+      if (f.type === "menu" || f.type === "dtmf") setStatus("menu");
+      if (f.type === "hold" || f.type === "announcement") setStatus("hold");
+      if (f.type === "utterance" || f.type === "probe") setStatus("assessing");
+      if (f.type === "summon") { setSummoned(true); setStatus("person"); ring(); }
+      if (f.type === "handoff") { setSummoned(true); setStatus("verify"); ring(); }
+      if (f.type === "ended") { setEnded(f); setStatus("ended"); src.close(); }
       if (f.audio) say(f.audio);
     };
     src.onerror = () => src.close();
@@ -158,405 +149,269 @@ export default function Page() {
       body: JSON.stringify({ action, scenario, call_ms: callMs }),
     }).catch(() => {});
     if (action === "not_a_person") {
-      audio.current?.pause(); muted.current = true;
-      setDemoted(true); setSummoned(false); setMode(null); setPhase("Back on hold");
-    } else {
-      setMode(action);
-      if (action === "take_over") { audio.current?.pause(); muted.current = true; }
-      else muted.current = false;
+      audio.current?.pause(); mute.current = true; setMuted(true);
+      setDemoted(true); setSummoned(false); setStatus("hold");
     }
-  }
-
-  function reset() {
-    es.current?.close(); audio.current?.pause();
-    setStage("brief"); setUnderstood(null); setMandate(null); setMandateText("");
+    if (action === "take_over") { audio.current?.pause(); mute.current = true; setMuted(true); }
   }
 
   const voted: string[] = det?.voted ?? [];
-  const decision = det?.decision ?? "LISTENING";
+  const spoken = frames.filter(f => f.audio).length;
+  const deadMs = Math.max(0, callMs - spoken * 3200);
 
-  return (
-    <main className="min-h-screen mx-auto max-w-3xl px-5 pb-16">
-      <header className="flex items-center gap-3 pt-8 pb-6">
-        <div className="text-[15px] font-extrabold tracking-tight">Saathi</div>
-        <div className="text-[13px]" style={{ color: "var(--faint)" }}>
-          your call companion
-        </div>
-        <div className="flex-1" />
-        <Steps stage={stage} />
-      </header>
+  // ---------------------------------------------------------------- table --
+  if (screen === "table") return (
+    <div className="wrap py-7">
+      <div className="text-[13px]" style={{ color: "var(--ink-faint)" }}>Saathi</div>
+      <h1 className="text-[26px] font-bold leading-tight mt-1">
+        I&apos;ll wait on hold.<br />You take the call.
+      </h1>
+      <p className="text-[15px] mt-2.5" style={{ color: "var(--ink-soft)" }}>
+        Tell me what went wrong. I&apos;ll ring them, sit through the menu and the hold
+        music, and ring you the moment an actual person picks up.
+      </p>
 
-      {stage === "brief" && (
-        <Frame eyebrow="Step 1 of 3" title="Let Saathi handle the call"
-          sub="Saathi rings the company, sits through the menu and the hold music, and calls you the moment a real person picks up. You do the talking.">
-          <div className="grid sm:grid-cols-3 gap-2 mb-5">
-            <Beat n="1" t="You describe it" d="In your own words, once." />
-            <Beat n="2" t="Saathi waits" d="Menus, hold music, all of it." />
-            <Beat n="3" t="You take over" d="Only when a person answers." />
+      <div className="card p-4 mt-5">
+        <textarea rows={3} value={problem} onChange={e => setProblem(e.target.value)} />
+        <p className="hair mt-2">
+          Don&apos;t put a card number or a code in here. I never need one — and I
+          couldn&apos;t use one, it&apos;s never loaded.
+        </p>
+        <button className="big mt-3" onClick={understand} disabled={busy || !problem.trim()}>
+          {busy ? "Reading…" : "Continue"}
+        </button>
+      </div>
+
+      {understood && (understood.matched ? (
+        <div className="card p-4 mt-4 rise">
+          <div className="text-[15px] font-semibold">
+            {understood.company} — {understood.goal}
           </div>
-          <label className="eyebrow">What went wrong?</label>
-          <textarea className="mt-2" rows={4} value={problem}
-            onChange={e => setProblem(e.target.value)} />
-          <p className="text-[12px] mt-3" style={{ color: "var(--faint)" }}>
-            No card numbers or one-time codes — Saathi never needs them, and if you
-            type one it gets removed before anything is said out loud.
-          </p>
-          <div className="flex gap-2 mt-5">
-            <button className="btn primary" onClick={understand} disabled={busy || !problem.trim()}>
-              {busy ? "Reading…" : "Continue"}
-            </button>
+          <div className="hair mt-1">
+            I&apos;ll quote {Object.entries(understood.facts ?? {})
+              .map(([k, v]) => `${k.replace(/_/g, " ")} ${v}`).join(", ") || "what you wrote"}.
           </div>
-        </Frame>
-      )}
+          <div className="hair mt-2" style={{ color: "var(--ink-soft)" }}>
+            They&apos;ll ask <em>you</em> for {(understood.will_be_asked_for ?? [])
+              .join(" and ").replace(/_/g, " ")}. I don&apos;t have those.
+          </div>
 
-      {stage === "understanding" && understood && (
-        <Frame eyebrow="Step 2 of 3" title="Is this right?"
-          sub="Check what Saathi picked up before it dials. You can go back and reword it.">
-          {!understood.matched ? (
-            <div className="text-[14px]" style={{ color: "var(--warning)" }}>
-              {understood.why}
+          <div className="line mt-3 pt-3">
+            <div className="text-[13px] mb-1.5" style={{ color: "var(--ink-soft)" }}>
+              If they offer something while you&apos;re away
             </div>
-          ) : (
-            <>
-              <div className="grid sm:grid-cols-2 gap-3">
-                <Field k="Company" v={understood.company} />
-                <Field k="Goal" v={understood.goal} />
-                {Object.entries(understood.facts ?? {}).map(([k, v]) => (
-                  <Field key={k} k={k.replace(/_/g, " ")} v={String(v)} />
-                ))}
-              </div>
-              <div className="mt-4 text-[12px]" style={{ color: "var(--faint)" }}>
-                matched because it {understood.why}
-              </div>
+            <textarea rows={2} value={mandateText}
+              placeholder="accept a refund of 400 or more, or a redelivery"
+              onChange={e => { setMandateText(e.target.value); setMandate(null); }} />
+            <p className="hair mt-1.5">
+              Leave it blank and I&apos;ll agree to nothing — just take a reference
+              number and ask them to call you back.
+            </p>
+            {mandate && <div className="text-[13px] mt-2 p-2.5 rounded-lg"
+              style={{ background: "var(--raise-2)" }}>
+              {mandate.error || mandate.needs?.[0] || mandate.readback}
+            </div>}
+            {mandateText.trim() && (
+              <button className="quiet" onClick={checkMandate} disabled={busy}>
+                {busy ? "checking…" : "read that back to me"}
+              </button>
+            )}
+          </div>
 
-              <div className="mt-5 p-3 rounded-xl" style={{ background: "var(--surface-2)" }}>
-                <div className="eyebrow mb-1">They&apos;ll ask you for these — not Saathi</div>
-                <div className="text-[13px]">
-                  {(understood.will_be_asked_for ?? []).join(", ").replace(/_/g, " ")}
-                </div>
-                <div className="text-[12px] mt-1" style={{ color: "var(--faint)" }}>
-                  Saathi doesn&apos;t have them and can&apos;t get them. When the agent asks,
-                  it hands the call straight to you.
-                </div>
-              </div>
-
-              <div className="mt-5">
-                <div className="eyebrow mb-2">Who picks up</div>
-                <div className="text-[12px] mb-2" style={{ color: "var(--faint)" }}>
-                  This is a practice line, so you choose who answers. Try the voice bot —
-                  it sounds completely human and Saathi still shouldn&apos;t call you.
-                </div>
-                <div className="flex gap-2 flex-wrap">
-                  {(understood.scenarios ?? []).map((s: any) => (
-                    <button key={s.id} onClick={() => setScenario(s.id)}
-                      className="btn" style={scenario === s.id
-                        ? { borderColor: "var(--primary)", color: "var(--primary)" } : {}}>
-                      {s.label} <span style={{ color: "var(--faint)" }}>· {s.truth}</span>
-                    </button>
-                  ))}
-                </div>
-              </div>
-
-              <div className="flex gap-2 mt-6">
-                <button className="btn ghost" onClick={() => setStage("brief")}>Back</button>
-                <button className="btn primary" onClick={() => setStage("permission")}>
-                  Set permissions
-                </button>
-              </div>
-            </>
-          )}
-        </Frame>
-      )}
-
-      {stage === "permission" && (
-        <Frame eyebrow="Step 3 of 3" title="What may Saathi agree to?"
-          sub="If they offer something while you're away, what can Saathi accept on your behalf?">
-          <textarea rows={3} value={mandateText} placeholder="e.g. accept a refund of 400 or more, or a redelivery if they can't refund"
-            onChange={e => { setMandateText(e.target.value); setMandate(null); }} />
-
-          <p className="text-[13px] mt-3" style={{ color: "var(--muted)" }}>
-            <strong>Leave it empty if you&apos;re not sure.</strong> Saathi will explain the
-            problem, write down a reference number and ask them to call you back — it
-            won&apos;t agree to anything at all.
-          </p>
-          <p className="text-[12px] mt-2" style={{ color: "var(--faint)" }}>
-            Amounts mean the <em>smallest</em> offer you&apos;d accept without being asked.
-            Say &ldquo;400 or more&rdquo; and a ₹200 offer comes back to you instead.
-          </p>
-
-          {mandate && (
-            <div className="mt-4 p-3 rounded-xl rise" style={{ background: "var(--surface-2)" }}>
-              {mandate.error && (
-                <div className="text-[13px]" style={{ color: "var(--warning)" }}>{mandate.error}</div>
-              )}
-              {mandate.needs?.length > 0 && (
-                <div className="text-[13px]" style={{ color: "var(--warning)" }}>{mandate.needs[0]}</div>
-              )}
-              {mandate.readback && !mandate.needs?.length && (
-                <>
-                  <div className="eyebrow mb-1">Saathi may</div>
-                  <div className="text-[14px]">{mandate.readback}</div>
-                </>
-              )}
+          <div className="line mt-3 pt-3">
+            <div className="text-[13px] mb-2" style={{ color: "var(--ink-soft)" }}>
+              Practice line — choose who picks up
             </div>
-          )}
-
-          <div className="flex gap-2 mt-6 flex-wrap">
-            <button className="btn ghost" onClick={() => setStage("understanding")}>Back</button>
-            <button className="btn" onClick={checkMandate} disabled={busy || !mandateText.trim()}>
-              {busy ? "Checking…" : "Read it back"}
-            </button>
-            <div className="flex-1" />
-            <select value={speed} onChange={e => setSpeed(+e.target.value)}
-              style={{ width: "auto", padding: "8px 12px" }}>
-              {[10, 20, 40].map(v => <option key={v} value={v}>{v}× faster</option>)}
+            <select value={scenario} onChange={e => setScenario(e.target.value)}>
+              {(understood.scenarios ?? []).map((s: any) => (
+                <option key={s.id} value={s.id}>{s.label}</option>
+              ))}
             </select>
-            <button className="btn primary" onClick={placeCall} disabled={!scenario}>
-              Place the call
-            </button>
-          </div>
-        </Frame>
-      )}
-
-      {(stage === "calling" || stage === "summary") && (
-        <>
-          <div className="card p-5">
-            <div className="flex items-center gap-5">
-              <div className="viz">
-                <i /><i /><i />
-                <div className="rounded-full grid place-items-center"
-                  style={{ width: 74, height: 74, background: "var(--elevated)" }}>
-                  <span className="mono text-[17px]">{clock(callMs)}</span>
-                </div>
-              </div>
-              <div className="flex-1 min-w-0">
-                <div className="eyebrow">{understood?.company ?? "Call"}</div>
-                <div className="text-[19px] font-bold mt-0.5">{phase}</div>
-                <div className="text-[13px] mt-1 leading-snug" style={{ color: "var(--muted)" }}>
-                  {EXPLAIN[phase] ?? ""}
-                </div>
-                <div className="text-[11px] mt-1.5" style={{ color: "var(--faint)" }}>
-                  the clock is real call time · being replayed {speed}× faster
-                </div>
-              </div>
-              <div className="text-right shrink-0">
-                <div className="text-[18px] font-extrabold"
-                  style={{ color: (VERDICT[decision] ?? VERDICT.LISTENING).tone }}>
-                  {(VERDICT[decision] ?? VERDICT.LISTENING).say}
-                </div>
-                <div className="text-[11px]" style={{ color: "var(--faint)" }}>
-                  {voted.length} of 3 signs agree
-                </div>
-              </div>
-            </div>
-
-            <div className="mt-5 space-y-1.5">
-              <div className="text-[12px] mb-2" style={{ color: "var(--muted)" }}>
-                Saathi won&apos;t call you until <strong>three different signs</strong> agree
-                it&apos;s a person. Any one on its own can be faked.
-              </div>
-              {CHECKS.map(c => {
-                const on = voted.includes(c.id);
-                const scripted = SCRIPTED.has(c.id);
-                return (
-                  <div key={c.id} className="flex items-center gap-2.5" title={c.asks}>
-                    <span style={{ width: 15, color: on ? "var(--success)" : "var(--faint)" }}>
-                      {on ? "✓" : "·"}
-                    </span>
-                    <span className="text-[13px] w-[116px] shrink-0"
-                      style={{ color: on ? "var(--foreground)" : "var(--faint)" }}>
-                      {c.name}
-                    </span>
-                    <span className="bar flex-1">
-                      <i style={{ width: on ? "100%" : "0%",
-                        background: scripted ? "var(--warning)" : "var(--success)" }} />
-                    </span>
-                    {scripted && (
-                      <span className="text-[10px] shrink-0" style={{ color: "var(--warning)" }}
-                        title="Not measured yet — a stand-in value while the real model is built">
-                        not measured yet
-                      </span>
-                    )}
-                  </div>
-                );
-              })}
-            </div>
-
-            <button className="btn ghost mt-3" style={{ padding: "4px 0", fontSize: 12 }}
-              onClick={() => setDetails(d => !d)}>
-              {details ? "Hide" : "Show"} the technical detail
-            </button>
-            {details && (
-              <div className="mt-2 p-3 rounded-xl text-[12px] rise"
-                style={{ background: "var(--surface-2)", color: "var(--muted)" }}>
-                <div className="mono">{decision} · score {det?.score > 0 ? "+" : ""}
-                  {det?.score?.toFixed?.(2) ?? "—"}</div>
-                <div className="mt-1">{det?.reason ?? "gathering evidence"}</div>
-                <div className="mt-1" style={{ color: "var(--faint)" }}>
-                  Evidence families: {CHECKS.map(c => c.id.toLowerCase()).join(", ")}.
-                  Amber ones are scripted stand-ins, not measured models.
-                </div>
-              </div>
-            )}
-            {demoted && (
-              <div className="text-[12px] mt-2" style={{ color: "var(--destructive)" }}>
-                You said that wasn&apos;t a person. It won&apos;t ring you again this call.
-              </div>
-            )}
           </div>
 
-          <div ref={log} className="card p-5 mt-4 overflow-y-auto" style={{ maxHeight: "42vh" }}>
-            {frames.map(f => <Line key={f.seq} f={f} />)}
-          </div>
-
-          <div className="mt-5">
-            {!summoned && (
-              <div className="text-[12px] text-center mb-3" style={{ color: "var(--faint)" }}>
-                These wake up when a person answers. Until then you can walk away.
-              </div>
-            )}
-            <div className="flex items-center justify-center gap-2 flex-wrap">
-              <Ctl label="Listen in" hint="hear it, stay silent" on={mode === "listen"}
-                disabled={!summoned} onClick={() => control("listen")} />
-              <Ctl label="Join" hint="both of you talk" on={mode === "join"}
-                disabled={!summoned} onClick={() => control("join")} />
-              <Ctl label="Take over" hint="Saathi goes quiet" on={mode === "take_over"}
-                disabled={!summoned} onClick={() => control("take_over")} />
-              <Ctl label="That isn't a person" hint="put me back on hold" danger
-                disabled={!summoned} onClick={() => control("not_a_person")} />
-            </div>
-          </div>
-        </>
-      )}
-
-      {stage === "summary" && ended && (
-        <Frame eyebrow="Call complete" title={
-          ended.false_fetch ? "It fetched you for a machine"
-            : ended.truth === "bot" ? "Correctly held"
-            : ended.fetched ? "A person answered and you were fetched"
-            : ended.handed_off ? "Handed over for verification"
-            : "Missed a human"}
-          sub={ended.false_fetch
-            ? "This is the failure that breaks the product."
-            : ended.truth === "bot"
-              ? "It was a machine the whole time, and you were never disturbed."
-              : "Everything above is what actually happened on the line."}>
-          <div className="grid sm:grid-cols-4 gap-3">
-            <Field k="truth" v={ended.truth} />
-            <Field k="fetched" v={ended.fetched ? clock(ended.fetched_at_ms) : "never"} />
-            <Field k="agreed" v={(ended.families ?? []).join(", ") || "—"} />
-            <Field k="probes" v={String(ended.probes)} />
-          </div>
-          <div className="flex gap-2 mt-6">
-            <button className="btn primary" onClick={reset}>New call</button>
-          </div>
-        </Frame>
-      )}
-    </main>
-  );
-}
-
-function Steps({ stage }: { stage: Stage }) {
-  const order: Stage[] = ["brief", "understanding", "permission", "calling", "summary"];
-  const at = order.indexOf(stage);
-  return (
-    <div className="flex gap-1.5 items-center">
-      {order.map((s, i) => (
-        <div key={s} style={{
-          width: i === at ? 20 : 7, height: 7, borderRadius: 999,
-          background: i <= at ? "var(--primary)" : "var(--elevated)",
-          transition: "width .25s, background .25s",
-        }} />
+          <button className="big mt-4" onClick={call} disabled={!scenario}>
+            Call them for me
+          </button>
+          <p className="hair mt-2 text-center">Nobody is actually being rung.</p>
+        </div>
+      ) : (
+        <div className="card p-4 mt-4" style={{ color: "var(--warn)" }}>{understood.why}</div>
       ))}
     </div>
   );
-}
 
-function Frame({ eyebrow, title, sub, children }: any) {
-  return (
-    <section className="card p-6 rise">
-      <div className="eyebrow">{eyebrow}</div>
-      <h1 className="text-[24px] font-extrabold tracking-tight mt-1">{title}</h1>
-      {sub && <p className="text-[14px] mt-1.5 mb-5" style={{ color: "var(--muted)" }}>{sub}</p>}
-      {children}
-    </section>
-  );
-}
-
-function Beat({ n, t, d }: { n: string; t: string; d: string }) {
-  return (
-    <div className="p-3 rounded-xl" style={{ background: "var(--surface-2)" }}>
-      <div className="eyebrow">{n}</div>
-      <div className="text-[13px] font-bold mt-0.5">{t}</div>
-      <div className="text-[12px]" style={{ color: "var(--faint)" }}>{d}</div>
+  // ----------------------------------------------------------------- why ---
+  if (screen === "why") return (
+    <div className="wrap py-6">
+      <button className="quiet" onClick={() => setScreen("call")}>‹ back to the call</button>
+      <h2 className="text-[20px] font-bold mt-1">What I heard</h2>
+      <p className="hair mt-1">
+        Every word, in order. Two of the five checks below aren&apos;t measured in this
+        build and are marked so.
+      </p>
+      <div ref={tape} className="mt-4">
+        {frames.map(f => <Turn key={f.seq} f={f} />)}
+      </div>
     </div>
   );
-}
 
-function Ctl({ label, hint, on, danger, disabled, onClick }: any) {
-  return (
-    <div className="flex flex-col items-center gap-1">
-      <button className={`btn ${danger ? "danger" : ""}`} disabled={disabled} onClick={onClick}
-        style={on && !danger ? { borderColor: "var(--primary)", color: "var(--primary)" } : {}}>
-        {label}
+  // ------------------------------------------------------------- receipt ---
+  if (screen === "receipt" && ended) return (
+    <div className="wrap py-7">
+      <h2 className="text-[22px] font-bold">
+        {ended.false_fetch ? "I interrupted you for a machine."
+          : ended.truth === "bot" ? "That was never a person."
+          : ended.handed_off ? "They asked to verify. Over to you."
+          : ended.fetched ? "You got a person." : "They hung up before I could reach anyone."}
+      </h2>
+      <p className="text-[15px] mt-2" style={{ color: "var(--ink-soft)" }}>
+        {ended.truth === "bot"
+          ? "It sounded human the whole way through. I didn't ring you, and that's the job."
+          : "That's the part only you could do."}
+      </p>
+      <div className="card p-4 mt-4">
+        <Row k="You waited" v="none of it" />
+        <Row k="I waited" v={mmss(callMs)} />
+        <Row k="Nobody was talking for" v={mmss(deadMs)} />
+        <Row k="Checks that agreed" v={`${voted.length} of 3 needed`} />
+      </div>
+      <button className="ghost mt-4" onClick={() => setScreen("why")}>See what I heard</button>
+      <button className="big mt-2" onClick={() => { setScreen("table"); setEnded(null); }}>
+        Start another
       </button>
-      <span className="text-[10px]" style={{ color: "var(--faint)" }}>{hint}</span>
     </div>
   );
-}
 
-function Field({ k, v }: { k: string; v: string }) {
+  // ---------------------------------------------------------------- call ---
   return (
-    <div className="p-3 rounded-xl" style={{ background: "var(--surface-2)" }}>
-      <div className="eyebrow">{k}</div>
-      <div className="text-[14px] mt-0.5 break-words">{v}</div>
-    </div>
-  );
-}
-
-function Line({ f }: { f: Frame }) {
-  if (f.type === "hello" || f.type === "detector" || f.type === "ended") return null;
-
-  if (f.type === "hold")
-    return <div className="text-[12px] my-2 breathe" style={{ color: "var(--faint)" }}>
-      ♪ hold music
-    </div>;
-
-  if (f.type === "dtmf")
-    return <div className="text-[12px] my-1.5" style={{ color: "var(--primary)" }}>
-      {f.text} <span style={{ color: "var(--faint)" }}>— {f.note}</span>
-    </div>;
-
-  if (f.type === "summon" || f.type === "handoff") {
-    const danger = f.type === "handoff";
-    return (
-      <div className="my-3 p-3 rounded-xl rise"
-        style={{ background: "var(--surface-2)",
-                 borderLeft: `3px solid ${danger ? "var(--destructive)" : "var(--success)"}` }}>
-        <div className="text-[14px] font-bold"
-          style={{ color: danger ? "var(--destructive)" : "var(--success)" }}>
-          {danger ? "They asked you to verify — handing over" : "A person is on the line"}
+    <div className="wrap py-6 flex flex-col min-h-screen">
+      <div className="flex items-start gap-3">
+        <div className="min-w-0">
+          <div className="text-[15px] font-semibold truncate">
+            {understood?.company ?? "Call"}
+          </div>
+          {demoted && <div className="hair" style={{ color: "var(--warn)" }}>
+            I won&apos;t interrupt you again on this call.
+          </div>}
         </div>
-        <div className="text-[12px] mt-0.5" style={{ color: "var(--muted)" }}>{f.text}</div>
+        <button className="quiet ml-auto shrink-0"
+          onClick={() => { mute.current = !muted; setMuted(m => !m); if (!muted) audio.current?.pause(); }}>
+          {muted ? "sound off" : "sound on"}
+        </button>
       </div>
-    );
-  }
 
-  const v = VOICE[f.speaker] ?? { label: f.speaker ?? "", tone: "var(--muted)" };
-  return (
-    <div className="mb-3 rise">
-      <div className="text-[10px] mb-0.5 flex gap-2 items-center flex-wrap">
-        <span style={{ color: v.tone, fontWeight: 700 }}>{v.label}</span>
-        {f.note?.includes("[disclosure]") &&
-          <span className="px-1.5 py-0.5 rounded" style={{ background: "var(--elevated)", color: "var(--faint)" }}>
-            says it is an AI
-          </span>}
-        {f.type === "probe" &&
-          <span className="px-1.5 py-0.5 rounded" style={{ background: "var(--elevated)", color: "var(--warning)" }}>
-            probe
-          </span>}
+      <div className="flex items-center gap-2.5 mt-5">
+        <span className="breathe" style={{ width: 9, height: 9, borderRadius: 99,
+          background: status === "person" ? "var(--good)" : "var(--calm)", flexShrink: 0 }} />
+        <div className="text-[19px] leading-snug" role="status" aria-live="polite">
+          {STATUS[status]}
+        </div>
       </div>
-      <div className="text-[14px] leading-snug">{f.text}</div>
+
+      <div className="mt-6 flex items-baseline gap-3">
+        <div className="mono text-[44px] leading-none">{mmss(callMs)}</div>
+        <button className="quiet text-[12px]" style={{ color: "var(--ink-faint)" }}
+          title="The clock is real call time. Playback is sped up so you can watch it.">
+          {speed}× faster
+        </button>
+      </div>
+      <div className="hair">on this call</div>
+
+      {status !== "dialling" && (
+        <div className="card p-4 mt-6">
+          <div className="flex gap-2 mb-2.5">
+            {CHECKS.map(c => (
+              <span key={c.id} title={c.name}
+                className={`dot ${voted.includes(c.id) ? "on" : ""} ${UNMEASURED.has(c.id) ? "unmeasured" : ""}`} />
+            ))}
+          </div>
+          <div className="text-[14px]" style={{ color: "var(--ink-soft)" }}>
+            {voted.length === 0 ? "Nothing yet says this is a person."
+              : `${voted.length} of the 3 checks I need agree.`}
+          </div>
+          <button className="quiet mt-1" onClick={() => setScreen("why")}>
+            what I&apos;m listening for ›
+          </button>
+        </div>
+      )}
+
+      {status === "hold" && !summoned && (
+        <div className="card p-4 mt-4 rise">
+          <div className="text-[16px] font-semibold">You can put this down.</div>
+          <div className="text-[14px] mt-1" style={{ color: "var(--ink-soft)" }}>
+            I&apos;ll ring the moment a person answers. Nothing needs you until then.
+          </div>
+          <button className="ghost mt-3" onClick={() => { ring(); setRang(true); }}>
+            {rang ? "Ring it again" : "Test the ring"}
+          </button>
+          {rang && <div className="hair mt-1.5 text-center">
+            That&apos;s the sound. It&apos;ll be that, on your phone.
+          </div>}
+        </div>
+      )}
+
+      <div className="mt-auto pt-6">
+        {summoned && !ended && (
+          <div className="rise">
+            <button className="big" onClick={() => control("take_over")}>
+              I&apos;ll take it
+            </button>
+            <button className="ghost mt-2" onClick={() => control("not_a_person")}>
+              That isn&apos;t a person
+            </button>
+          </div>
+        )}
+        {ended && (
+          <button className="big" onClick={() => setScreen("receipt")}>See what happened</button>
+        )}
+        {!summoned && !ended && (
+          <button className="quiet w-full" onClick={() => setScreen("why")}>
+            listen in ›
+          </button>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function Row({ k, v }: { k: string; v: string }) {
+  return (
+    <div className="flex items-baseline gap-3 py-1.5">
+      <span className="text-[14px]" style={{ color: "var(--ink-soft)" }}>{k}</span>
+      <span className="mono ml-auto text-[15px]">{v}</span>
+    </div>
+  );
+}
+
+function Turn({ f }: { f: any }) {
+  if (f.type === "hello" || f.type === "detector" || f.type === "ended") return null;
+  if (f.type === "hold")
+    return <div className="hair py-2 breathe">hold music</div>;
+  if (f.type === "dtmf")
+    return <div className="text-[13px] py-1.5" style={{ color: "var(--calm)" }}>
+      {f.text} <span className="hair">— {f.note}</span>
+    </div>;
+  if (f.type === "summon" || f.type === "handoff")
+    return <div className="py-3 my-2 px-3 rounded-xl flash"
+      style={{ border: `1px solid ${f.type === "handoff" ? "var(--stop)" : "var(--good)"}` }}>
+      <div className="text-[14px] font-semibold"
+        style={{ color: f.type === "handoff" ? "var(--stop)" : "var(--good)" }}>
+        {f.type === "handoff" ? "They want to verify you" : "A person answered"}
+      </div>
+    </div>;
+
+  const us = f.speaker === "saathi";
+  return (
+    <div className="py-2.5 line">
+      <div className="text-[11px] mb-0.5 flex gap-2"
+        style={{ color: us ? "var(--calm)" : "var(--ink-faint)" }}>
+        {SPEAKER[f.speaker] ?? f.speaker}
+        {f.note?.includes("[disclosure]") && <span style={{ color: "var(--ink-faint)" }}>
+          · told them it&apos;s an AI</span>}
+      </div>
+      <div className="text-[14.5px]" style={{ color: us ? "var(--ink)" : "var(--ink-soft)" }}>
+        {f.text}
+      </div>
     </div>
   );
 }

@@ -1,88 +1,71 @@
 @import "tailwindcss";
 
-/* A calmer, warmer dark than the terminal look this replaces. Blue-tinted
-   near-black, translucent cards, soft borders -- the register of something you
-   trust with a phone call rather than something you monitor. */
+/* Phone first. One column, 420px, thumb-reachable. There is no desktop layout
+   because there is no desktop moment -- the product's whole claim is that you
+   put the thing down and walk off. */
 :root {
-  --background:  oklch(0.13 0.018 258);
-  --surface:     oklch(0.18 0.022 258 / 82%);
-  --surface-2:   oklch(0.21 0.020 258);
-  --elevated:    oklch(0.23 0.025 257);
-  --foreground:  oklch(0.96 0.008 255);
-  --muted:       oklch(0.72 0.020 258);
-  --faint:       oklch(0.55 0.020 258);
-  --primary:     oklch(0.70 0.150 250);
-  --primary-ink: oklch(0.15 0.020 258);
-  --success:     oklch(0.75 0.170 150);
-  --warning:     oklch(0.83 0.160 85);
-  --destructive: oklch(0.63 0.180 25);
-  --border:      oklch(0.35 0.025 257 / 62%);
-  --radius: 14px;
+  --bg:        #07090c;
+  --raise:     #10141a;
+  --raise-2:   #171d25;
+  --line:      #222b36;
+  --ink:       #f2f5f8;
+  --ink-soft:  #8e9bab;
+  --ink-faint: #5b6775;
+  --calm:      #6ea8fe;
+  --good:      #2fbf71;
+  --warn:      #e0a33a;
+  --stop:      #e2584d;
 }
 
 html, body {
-  margin: 0;
-  background:
-    radial-gradient(900px 500px at 12% -10%, oklch(0.24 0.06 258 / 55%), transparent 60%),
-    radial-gradient(700px 420px at 92% 0%, oklch(0.22 0.05 292 / 42%), transparent 62%),
-    var(--background);
-  background-attachment: fixed;
-  color: var(--foreground);
-  font-family: Manrope, ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
-  -webkit-font-smoothing: antialiased;
+  margin: 0; background: var(--bg); color: var(--ink);
+  font-family: ui-sans-serif, -apple-system, "Segoe UI", Roboto, sans-serif;
+  font-size: 16px; line-height: 1.45; -webkit-font-smoothing: antialiased;
+  overscroll-behavior-y: none;
 }
+* { box-sizing: border-box; }
+.wrap { max-width: 420px; margin: 0 auto; padding: 0 20px env(safe-area-inset-bottom); }
 
-.card {
-  background: var(--surface);
-  border: 1px solid var(--border);
-  border-radius: var(--radius);
-  backdrop-filter: blur(14px);
-}
-.eyebrow {
-  font-size: 11px; letter-spacing: .14em; text-transform: uppercase;
-  color: var(--faint); font-weight: 600;
-}
-.mono { font-variant-numeric: tabular-nums;
-        font-family: ui-monospace, "SF Mono", Menlo, monospace; }
+.card { background: var(--raise); border: 1px solid var(--line); border-radius: 16px; }
+.hair { font-size: 12px; color: var(--ink-faint); line-height: 1.5; }
+.mono { font-variant-numeric: tabular-nums; font-family: ui-monospace, Menlo, monospace; }
 
-.btn {
-  border: 1px solid var(--border); background: var(--elevated);
-  color: var(--foreground); border-radius: 999px; padding: 10px 18px;
-  font-weight: 600; font-size: 14px; cursor: pointer;
-  transition: transform .08s, background .15s, opacity .15s;
+button { font: inherit; cursor: pointer; }
+.big {
+  width: 100%; min-height: 56px; border-radius: 14px; border: 0;
+  background: var(--calm); color: #04070c; font-weight: 700; font-size: 16px;
 }
-.btn:hover:not(:disabled) { background: oklch(0.27 0.03 257); }
-.btn:active:not(:disabled) { transform: scale(.97); }
-.btn:disabled { opacity: .35; cursor: not-allowed; }
-.btn.primary { background: var(--primary); color: var(--primary-ink); border-color: transparent; }
-.btn.danger  { background: var(--destructive); color: #fff; border-color: transparent; }
-.btn.ghost   { background: transparent; }
+.big:disabled { opacity: .35; }
+.ghost {
+  width: 100%; min-height: 48px; border-radius: 12px; font-size: 15px;
+  background: transparent; color: var(--ink-soft); border: 1px solid var(--line);
+}
+.ghost:active { background: var(--raise-2); }
+.quiet { background: none; border: 0; color: var(--ink-soft); font-size: 14px; padding: 8px 0; }
 
 textarea, input, select {
-  background: oklch(0.16 0.02 258); color: var(--foreground);
-  border: 1px solid var(--border); border-radius: 12px;
-  padding: 14px 16px; font: inherit; width: 100%; outline: none; resize: none;
+  width: 100%; font: inherit; color: var(--ink); background: var(--raise-2);
+  border: 1px solid var(--line); border-radius: 12px; padding: 13px 14px;
+  outline: none; resize: none;
 }
-textarea:focus, input:focus, select:focus { border-color: var(--primary); }
+textarea:focus, input:focus, select:focus { border-color: var(--calm); }
 
-/* the listening ring on the call screen */
-.viz { position: relative; width: 132px; height: 132px; display: grid; place-items: center; }
-.viz i {
-  position: absolute; inset: 0; border-radius: 999px;
-  border: 1px solid var(--primary); opacity: 0;
-  animation: ring 2.6s cubic-bezier(.2,.7,.3,1) infinite;
-}
-.viz i:nth-child(2) { animation-delay: .85s }
-.viz i:nth-child(3) { animation-delay: 1.7s }
-@keyframes ring { 0% { transform: scale(.55); opacity: .55 } 100% { transform: scale(1.25); opacity: 0 } }
+/* the status dot breathes slowly -- a call that is waiting should look restful,
+   not busy. Nothing here spins. */
+.breathe { animation: br 3.2s ease-in-out infinite; }
+@keyframes br { 0%,100% { opacity: 1 } 50% { opacity: .28 } }
 
-.bar { height: 5px; border-radius: 3px; background: oklch(0.26 0.02 258); overflow: hidden; }
-.bar > i { display: block; height: 100%; border-radius: 3px; transition: width .4s ease; }
+/* one dot per check. Never a progress bar: a bar implies a denominator, and
+   how long a queue takes is exactly what nobody knows. */
+.dot { width: 11px; height: 11px; border-radius: 99px;
+       border: 1.5px solid var(--ink-faint); transition: all .3s ease; }
+.dot.on { background: var(--good); border-color: var(--good); }
+.dot.unmeasured { border-style: dashed; opacity: .45; }
 
-@keyframes rise { from { opacity: 0; transform: translateY(8px) } to { opacity: 1; transform: none } }
-.rise { animation: rise .22s ease-out both; }
-@keyframes breathe { 0%,100% { opacity: 1 } 50% { opacity: .45 } }
-.breathe { animation: breathe 2s ease-in-out infinite; }
+.rise { animation: rise .2s ease-out both; }
+@keyframes rise { from { opacity: 0; transform: translateY(6px) } to { opacity: 1; transform: none } }
+.flash { animation: fl .5s ease-out both; }
+@keyframes fl { from { background: #2fbf7126 } to { background: transparent } }
 
-::-webkit-scrollbar { width: 8px }
-::-webkit-scrollbar-thumb { background: var(--elevated); border-radius: 4px }
+.line { border-top: 1px solid var(--line); }
+::-webkit-scrollbar { width: 0 }
