@@ -15,7 +15,14 @@
 
 # next.js
 /.next/
-/out/
+# /out is COMMITTED -- the engine serves it from the same origin and the
+# deployed host has no Node toolchain to build it. This file is scaffolded
+# by Next.js and is the SECOND gitignore in this repo; editing only the
+# root one left this rule in force, so `git add -A` silently skipped new
+# build chunks and the deployed site 404'd on a lazily-loaded chunk with
+# ChunkLoadError. Nothing in index.html referenced it, so asset checks
+# against the HTML did not catch it either.
+# /out/
 
 # production
 /build
