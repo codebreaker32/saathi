@@ -98,13 +98,33 @@ export default function Page() {
   useEffect(() => { log.current?.scrollTo({ top: 1e9, behavior: "smooth" }); }, [frames]);
   useEffect(() => () => { es.current?.close(); audio.current?.pause(); }, []);
 
-  const say = useCallback((id: string) => {
-    if (muted.current) return;
-    audio.current?.pause();
+  /* Clips are QUEUED, never cut off. The old version paused whatever was
+     playing the instant the next frame arrived, so any line whose audio ran
+     longer than its slot was chopped mid-word -- on real_rep the disclosure
+     had 13.1s of speech and 4.0s of slot. The server now paces on real audio
+     length too; this is the second line of defence, so a slow network or a
+     re-render cannot reintroduce the clipping. */
+  const queue = useRef<string[]>([]);
+  const playing = useRef(false);
+
+  const drain = useCallback(() => {
+    if (playing.current || muted.current) return;
+    const id = queue.current.shift();
+    if (!id) return;
+    playing.current = true;
     const a = new Audio(`${API}/api/audio/${id}.wav`);
     audio.current = a;
-    a.play().catch(() => {});
+    const next = () => { playing.current = false; drain(); };
+    a.onended = next;
+    a.onerror = next;
+    a.play().catch(next);
   }, []);
+
+  const say = useCallback((id: string) => {
+    if (muted.current) return;
+    queue.current.push(id);
+    drain();
+  }, [drain]);
 
   async function understand() {
     setBusy(true);

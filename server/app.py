@@ -101,6 +101,28 @@ def _twilio_webhook(path: str, form: dict) -> str:
         return T.document()
 
 
+def annotate_audio_ms(frames: list[dict]) -> list[dict]:
+    """Stamp each audio-bearing frame with how long its clip ACTUALLY runs.
+
+    Read from the rendered wav rather than the scenario's speak_ms, because the
+    yaml figures are estimates and Polly is the ground truth. The pacing loop
+    uses this to stop a clip being cut off by the frame after it.
+    """
+    for f in frames:
+        aid = f.get("audio")
+        if not aid:
+            continue
+        p = AUDIO_DIR / f"{aid}.wav"
+        if not p.exists():
+            continue
+        try:
+            with wave.open(str(p)) as w:
+                f["audio_ms"] = int(w.getnframes() / w.getframerate() * 1000)
+        except Exception:
+            continue
+    return frames
+
+
 def prerender(frames: list[dict], profile: str | None = None) -> dict:
     """Synthesise every utterance once, up front. Cached across runs."""
     AUDIO_DIR.mkdir(parents=True, exist_ok=True)
@@ -466,7 +488,8 @@ class Handler(BaseHTTPRequestHandler):
         # Rebuilt once the clips exist, so the summary can report hold time from
         # measured audio instead of guessing. build() is pure and cheap; run()
         # is not re-run, so the timeline is identical.
-        frames = build(out, sc, speed=speed, speech_ms=_speech_ms(frames))
+        frames = annotate_audio_ms(
+            build(out, sc, speed=speed, speech_ms=_speech_ms(frames)))
         print(f"  [voice] {name}: {stats}", file=sys.stderr)
 
         self.send_response(200)
@@ -493,14 +516,28 @@ class Handler(BaseHTTPRequestHandler):
         self.end_headers()
 
         t0 = time.monotonic()
+        # SPEECH PLAYS AT FULL LENGTH; ONLY WAITING IS COMPRESSED. The scenario's
+        # speak_ms are estimates and real Polly runs longer, so pacing purely on
+        # the compressed call clock hands a clip less time than it needs and the
+        # next frame cuts it off mid-word. Measured on real_rep: the disclosure
+        # got 4.0s of budget for 13.1s of audio, and two rep lines got 0.0s and
+        # 5.6s for 3.1s and 7.1s.
+        #
+        # `floor` is the earliest the NEXT frame may be sent: after a frame that
+        # carries audio, nothing follows until that audio has actually finished.
+        # Hold and menus still compress, which is the point of the speed control
+        # -- twenty minutes of queue in a few seconds, every spoken word intact.
+        floor = 0.0
         try:
             for f in frames:
-                due = t0 + (f["call_ms"] / 1000.0) / speed
+                due = max(t0 + (f["call_ms"] / 1000.0) / speed, floor)
                 delay = due - time.monotonic()
                 if delay > 0:
                     time.sleep(min(delay, 20.0))
                 payload = json.dumps(f).encode()
                 self._chunk(b"data: " + payload + b"\n\n")
+                if f.get("audio_ms"):
+                    floor = time.monotonic() + f["audio_ms"] / 1000.0
             self._chunk(b"event: done\ndata: {}\n\n")
             self._chunk(b"")          # terminating zero-length chunk
         except (BrokenPipeError, ConnectionResetError):
