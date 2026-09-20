@@ -65,6 +65,8 @@ class Outcome:
     handed_off_at_ms: int | None = None
     truth: str = "unknown"
     human_first_word_ms: int | None = None
+    warm_start: bool = False
+    learned: int = 0
     disclosed_before_speaking: bool = True
     probes_used: int = 0
 
@@ -88,7 +90,7 @@ def load(name: str, directory: Path | None = None) -> dict:
     return yaml.safe_load((d / f"{name}.yaml").read_text())
 
 
-def run(scenario: dict, goal: str, *, brief=None, verifier=None,
+def run(scenario: dict, goal: str, *, brief=None, verifier=None, store=None,
         max_hold_ms: int = 1_800_000) -> Outcome:
     """`brief` is the ONLY channel by which user facts reach anything the agent
     says. Nothing else is consulted, which is what makes the whitelist in
@@ -101,11 +103,21 @@ def run(scenario: dict, goal: str, *, brief=None, verifier=None,
     out = Outcome()
     acc = EpochAccumulator(phase=LineState.IVR)
     rep = RepetitionDetector(destination=scenario.get("line", "sim://unknown"))
-    # What we heard on previous calls to this number. In production this is the
-    # per-destination index in DynamoDB, and it is the single strongest signal
-    # available: an IVR prompt is identical on every call, a person is not.
+    # What we heard on previous calls to this number -- the single strongest
+    # signal available, because an IVR prompt is identical on every call and a
+    # person is not. Fetched ONCE, here, and matched in memory for the rest of
+    # the call: a round trip inside the decision loop would put latency on the
+    # one decision where latency is trust.
+    #
+    # The scenario's own known_prompts are kept as a seed so tests stay
+    # offline and deterministic whether or not a table exists.
+    line = scenario.get("line", "sim://unknown")
     for prompt in scenario.get("known_prompts", []):
         rep.remember(prompt)
+    if store is not None:
+        for prompt in store.known(line):
+            rep.remember(prompt)
+        out.warm_start = True
     verifier = verifier if verifier is not None else VerificationDetector()
     spoken_by_us: list[str] = []
     # Digits a rep may read back to us without it counting as a request to
@@ -220,6 +232,17 @@ def run(scenario: dict, goal: str, *, brief=None, verifier=None,
     gt = scenario.get("ground_truth", {})
     out.truth = gt.get("truth", "unknown")
     out.human_first_word_ms = gt.get("human_first_word_ms")
+
+    # Write back only what the detector concluded was a machine. Remembering a
+    # human's words would poison the index: the next call would score a live
+    # person as a recording of themselves.
+    if store is not None:
+        for b in out.beats:
+            note = b.note or ""
+            if b.actor == "them" and any(t in note for t in
+                                         ("[menu]", "[queue]", "[machine]")):
+                store.remember(line, b.text)
+                out.learned += 1
     return out
 
 
