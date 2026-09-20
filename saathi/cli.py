@@ -66,7 +66,8 @@ def main(argv=None) -> int:
     v = sub.add_parser("voice", help="render a call to a .wav you can listen to")
     v.add_argument("--scenario", required=True)
     v.add_argument("--out", default=None)
-    v.add_argument("--profile", default="saathi")
+    v.add_argument("--profile", default=None,
+                   help="AWS profile; omit for standard credential resolution")
 
     sub.add_parser("playbooks", help="list playbooks and what they will be asked for")
 
@@ -78,7 +79,8 @@ def main(argv=None) -> int:
         from pathlib import Path as _P
         from saathi import voice as V
         if not V.available(args.profile):
-            print(f"AWS profile '{args.profile}' is not reachable; run: aws login")
+            who = f"profile '{args.profile}'" if args.profile else "default credentials"
+            print(f"Polly is not reachable with {who}; run: aws login")
             return 2
         sc = load(args.scenario)
         out = run(sc, sc.get("goal", ""))

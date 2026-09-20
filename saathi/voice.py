@@ -26,6 +26,17 @@ from pathlib import Path
 SAMPLE_RATE = 16000          # Polly 'pcm' is 16-bit signed, mono
 CACHE = Path(__file__).resolve().parent.parent / ".voice-cache"
 
+PROFILE = os.environ.get("SAATHI_AWS_PROFILE", "")
+"""Which AWS profile to sign with. Empty means standard credential resolution
+-- env vars, an `aws login` session, or an instance role once deployed. Naming
+a profile is the exception, not the default, because a deployed box has no
+profiles and hardcoding one is how this breaks on the first server."""
+
+
+def _aws(*args: str, profile: str | None = None) -> list[str]:
+    prof = PROFILE if profile is None else profile
+    return ["aws", *(["--profile", prof] if prof else []), *args]
+
 
 @dataclass(frozen=True)
 class Speaker:
@@ -59,7 +70,7 @@ def _cache_path(text: str, sp: Speaker) -> Path:
     return CACHE / f"{sp.key}-{h}.pcm"
 
 
-def synthesize(text: str, speaker: str, *, profile: str = "saathi") -> bytes:
+def synthesize(text: str, speaker: str, *, profile: str | None = None) -> bytes:
     """Raw 16-bit PCM for one utterance. Cached, so a re-run is free."""
     sp = SPEAKERS.get(speaker) or SPEAKERS["saathi"]
     path = _cache_path(text, sp)
@@ -68,10 +79,10 @@ def synthesize(text: str, speaker: str, *, profile: str = "saathi") -> bytes:
 
     CACHE.mkdir(exist_ok=True)
     tmp = path.with_suffix(".tmp")
-    cmd = ["aws", "polly", "synthesize-speech", "--profile", profile,
-           "--engine", sp.engine, "--voice-id", sp.voice,
-           "--output-format", "pcm", "--sample-rate", str(SAMPLE_RATE),
-           "--text", text, str(tmp)]
+    cmd = _aws("polly", "synthesize-speech",
+               "--engine", sp.engine, "--voice-id", sp.voice,
+               "--output-format", "pcm", "--sample-rate", str(SAMPLE_RATE),
+               "--text", text, str(tmp), profile=profile)
     r = subprocess.run(cmd, capture_output=True, text=True)
     if r.returncode != 0:
         raise VoiceError(f"polly failed for {sp.voice}: {r.stderr.strip()[:200]}")
@@ -115,9 +126,17 @@ def write_wav(path: Path, chunks: list[bytes]) -> Path:
     return path
 
 
-def available(profile: str = "saathi") -> bool:
-    r = subprocess.run(["aws", "sts", "get-caller-identity", "--profile", profile],
-                       capture_output=True, text=True)
+def available(profile: str | None = None) -> bool:
+    """Checks Polly specifically, not STS.
+
+    Measured on a real account: STS returned NoCredentials while Polly signed
+    and billed a request perfectly well. Probing the service you actually use
+    beats probing one you do not.
+    """
+    r = subprocess.run(_aws("polly", "describe-voices",
+                            "--language-code", "en-US",
+                            "--query", "length(Voices)",
+                            profile=profile), capture_output=True, text=True)
     return r.returncode == 0
 
 
@@ -160,7 +179,7 @@ LONG_GAP_MS = 3000
 """Any silence longer than this is waiting, not a pause between sentences."""
 
 
-def render_call(outcome, *, profile: str = "saathi") -> tuple[list[bytes], dict]:
+def render_call(outcome, *, profile: str | None = None) -> tuple[list[bytes], dict]:
     """Assemble the audio, accounting for EVERY millisecond of the call.
 
     The first version of this only treated an explicit hold beat as waiting and

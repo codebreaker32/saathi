@@ -32,7 +32,7 @@ CONTROLS: list[dict] = []
 _render_lock = threading.Lock()
 
 
-def prerender(frames: list[dict], profile: str = "saathi") -> dict:
+def prerender(frames: list[dict], profile: str | None = None) -> dict:
     """Synthesise every utterance once, up front. Cached across runs."""
     AUDIO_DIR.mkdir(parents=True, exist_ok=True)
     made = skipped = failed = 0
