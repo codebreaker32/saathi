@@ -31,6 +31,7 @@ from saathi.frames import audio_id, build
 from saathi.simulate import SCENARIO_DIR, load, run
 
 AUDIO_DIR = Path(__file__).resolve().parent.parent / ".voice-cache" / "wav"
+SITE_DIR = Path(__file__).resolve().parent.parent / "web" / "out"
 CONTROLS: list[dict] = []
 SESSIONS: dict[str, dict] = {}
 _render_lock = threading.Lock()
@@ -181,6 +182,25 @@ class Handler(BaseHTTPRequestHandler):
                     "truth": sc.get("ground_truth", {}).get("truth"),
                 })
             return self._json(items)
+
+        # The built UI, served from the SAME ORIGIN as the API. That is the
+        # whole point: an HTTPS page cannot call an HTTP API, and a Cloudflare
+        # quick tunnel buffers SSE no matter what headers you send (measured:
+        # every frame arriving in one instant at 17.5s, so the call view sat on
+        # "Dialling" and then jumped to the summary). One origin over plain
+        # HTTP has neither problem, and the stream arrives frame by frame.
+        if SITE_DIR.is_dir():
+            rel = u.path.lstrip("/") or "index.html"
+            if not u.path.startswith(("/api/", "/twilio/")):
+                cand = (SITE_DIR / rel).resolve()
+                if not str(cand).startswith(str(SITE_DIR.resolve())):
+                    return self.send_error(403)      # no path traversal
+                if cand.is_dir():
+                    cand = cand / "index.html"
+                if not cand.exists() and not cand.suffix:
+                    cand = cand.with_suffix(".html")
+                if cand.exists() and cand.is_file():
+                    return self._static(cand)
 
         if u.path in ("/", "/health"):
             # A root page, because the bare 404 that used to live here looked
@@ -368,6 +388,37 @@ class Handler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(raw)
 
+    _MIME = {".html": "text/html; charset=utf-8", ".js": "text/javascript",
+             ".css": "text/css", ".svg": "image/svg+xml", ".ico": "image/x-icon",
+             ".json": "application/json", ".txt": "text/plain; charset=utf-8",
+             ".woff2": "font/woff2", ".png": "image/png"}
+
+    def _static(self, path: Path):
+        raw = path.read_bytes()
+        self.send_response(200)
+        self._cors()
+        self.send_header("Content-Type",
+                         self._MIME.get(path.suffix, "application/octet-stream"))
+        self.send_header("Content-Length", str(len(raw)))
+        # Hashed asset names, so they can be cached hard; the HTML cannot.
+        self.send_header("Cache-Control",
+                         "public, max-age=31536000" if "/_next/" in path.as_posix()
+                         else "no-cache")
+        self.end_headers()
+        self.wfile.write(raw)
+
+    def _chunk(self, payload: bytes) -> None:
+        """One HTTP chunk, flushed immediately.
+
+        An empty payload writes the terminating zero-length chunk that ends a
+        chunked body.
+        """
+        self.wfile.write(f"{len(payload):X}\r\n".encode("ascii"))
+        if payload:
+            self.wfile.write(payload)
+        self.wfile.write(b"\r\n")
+        self.wfile.flush()
+
     def _wav(self, path: Path):
         if not path.exists() or path.suffix != ".wav":
             return self.send_error(404)
@@ -421,11 +472,23 @@ class Handler(BaseHTTPRequestHandler):
         self.send_response(200)
         self._cors()
         self.send_header("Content-Type", "text/event-stream")
-        self.send_header("Cache-Control", "no-cache")
+        # no-transform tells intermediaries not to compress. A proxy that
+        # compresses has to buffer to do it, and buffering an SSE stream
+        # defeats the entire point of one.
+        self.send_header("Cache-Control", "no-cache, no-transform")
+        self.send_header("Content-Encoding", "identity")
+        # CHUNKED, and this is load-bearing rather than tidy. Without it the
+        # body is delimited only by the connection closing, so every
+        # intermediary has to buffer the WHOLE stream to learn its length.
+        # Measured through a Cloudflare tunnel: first frame arrived at 20.5s
+        # and all twelve landed in the same instant, so the call view sat on
+        # "Dialling 00:00" for the entire call and then jumped straight to the
+        # summary. Locally, where nothing proxies, the first frame took 0.05s
+        # -- which is exactly why this was invisible in development.
+        self.send_header("Transfer-Encoding", "chunked")
         # close, not keep-alive: the stream is finite and a client that cannot
         # tell "finished" from "quiet" will sit there forever
-        self.send_header("Connection", "close")
-        self.close_connection = True
+        self.send_header("Connection", "keep-alive")
         self.send_header("X-Accel-Buffering", "no")
         self.end_headers()
 
@@ -437,10 +500,9 @@ class Handler(BaseHTTPRequestHandler):
                 if delay > 0:
                     time.sleep(min(delay, 20.0))
                 payload = json.dumps(f).encode()
-                self.wfile.write(b"data: " + payload + b"\n\n")
-                self.wfile.flush()
-            self.wfile.write(b"event: done\ndata: {}\n\n")
-            self.wfile.flush()
+                self._chunk(b"data: " + payload + b"\n\n")
+            self._chunk(b"event: done\ndata: {}\n\n")
+            self._chunk(b"")          # terminating zero-length chunk
         except (BrokenPipeError, ConnectionResetError):
             pass                                     # viewer closed the tab
 
