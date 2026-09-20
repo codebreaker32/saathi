@@ -182,6 +182,34 @@ class Handler(BaseHTTPRequestHandler):
                 })
             return self._json(items)
 
+        if u.path in ("/", "/health"):
+            # A root page, because the bare 404 that used to live here looked
+            # exactly like a broken deployment. It is not an API; it exists so a
+            # human who opens the engine URL can see what is running.
+            from saathi.transport.twilio_transport import TwilioConfig
+            live = TwilioConfig.available()
+            body = (
+                "<!doctype html><meta charset=utf-8><title>Saathi engine</title>"
+                "<style>body{font:14px system-ui;margin:40px;max-width:640px;"
+                "line-height:1.6}code{background:#f4f4f5;padding:2px 6px;"
+                "border-radius:4px}</style>"
+                "<h1>Saathi engine</h1><p>Running. This is the API, not the app.</p>"
+                f"<p>Live telephony: <strong>{'yes' if live else 'no'}</strong></p>"
+                "<p>Endpoints:</p><ul>"
+                "<li><code>/api/scenarios</code></li>"
+                "<li><code>/api/telephony</code></li>"
+                "<li><code>/api/events?session=...</code></li>"
+                "<li><code>/twilio/answer</code>, <code>/twilio/status</code> (POST)</li>"
+                "</ul>"
+            ).encode("utf-8")
+            self.send_response(200)
+            self._cors()
+            self.send_header("Content-Type", "text/html; charset=utf-8")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+            return
+
         if u.path == "/api/telephony":
             # The UI must be able to say truthfully whether a number will be
             # dialled or simulated. Guessing here is how a demo ends up implying
