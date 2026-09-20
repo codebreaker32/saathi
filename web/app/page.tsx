@@ -2,7 +2,8 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 
-const API = process.env.NEXT_PUBLIC_API ?? "http://127.0.0.1:8787";
+// Same origin in production. NEXT_PUBLIC_API only for split-server dev.
+const API = process.env.NEXT_PUBLIC_API ?? "";
 /* The detector's families, said the way a person would say them. Nobody
    outside this codebase knows what CONTINGENCY means, and a bar labelled
    with it tells a user nothing about whether to trust the thing. */

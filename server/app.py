@@ -14,6 +14,7 @@ pretending an eleven-minute hold took eleven minutes.
 from __future__ import annotations
 
 import json
+import os
 import sys
 import threading
 import time
@@ -28,6 +29,11 @@ from saathi.frames import audio_id, build
 from saathi.simulate import SCENARIO_DIR, load, run
 
 AUDIO_DIR = Path(__file__).resolve().parent.parent / ".voice-cache" / "wav"
+WEB_DIR = Path(__file__).resolve().parent.parent / "web" / "out"
+MIME = {".html": "text/html; charset=utf-8", ".js": "text/javascript",
+        ".css": "text/css", ".svg": "image/svg+xml", ".ico": "image/x-icon",
+        ".png": "image/png", ".woff2": "font/woff2", ".json": "application/json",
+        ".txt": "text/plain", ".map": "application/json"}
 CONTROLS: list[dict] = []
 SESSIONS: dict[str, dict] = {}
 _render_lock = threading.Lock()
@@ -109,6 +115,9 @@ class Handler(BaseHTTPRequestHandler):
         if u.path.startswith("/api/audio/"):
             return self._wav(AUDIO_DIR / Path(u.path).name)
 
+        if not u.path.startswith("/api/"):
+            return self._static(u.path)
+
         if u.path == "/api/events":
             sid = (q.get("session") or [""])[0]
             sess = SESSIONS.get(sid, {})
@@ -117,6 +126,30 @@ class Handler(BaseHTTPRequestHandler):
             return self._sse(name, speed, sess)
 
         self.send_error(404)
+
+    def _static(self, path: str):
+        """Serve the exported Next build. Unknown paths fall back to index so a
+        refresh on any URL still loads the app."""
+        if not WEB_DIR.exists():
+            return self.send_error(503, "web/out missing -- run: cd web && npm run build")
+        rel = path.lstrip("/") or "index.html"
+        f = (WEB_DIR / rel).resolve()
+        if f.is_dir():
+            f = f / "index.html"
+        # never serve outside the export, whatever the request says
+        if WEB_DIR.resolve() not in f.parents and f != WEB_DIR.resolve():
+            return self.send_error(403)
+        if not f.exists():
+            f = WEB_DIR / "index.html"
+        raw = f.read_bytes()
+        self.send_response(200)
+        self._cors()
+        self.send_header("Content-Type", MIME.get(f.suffix, "application/octet-stream"))
+        self.send_header("Content-Length", str(len(raw)))
+        if "/_next/" in path:
+            self.send_header("Cache-Control", "public, max-age=31536000, immutable")
+        self.end_headers()
+        self.wfile.write(raw)
 
     def do_POST(self):
         u = urlparse(self.path)
@@ -280,10 +313,12 @@ class Handler(BaseHTTPRequestHandler):
 
 def main():
     port = int(sys.argv[1]) if len(sys.argv) > 1 else 8787
-    srv = ThreadingHTTPServer(("127.0.0.1", port), Handler)
-    print(f"saathi stream on http://127.0.0.1:{port}")
-    print(f"  scenarios  http://127.0.0.1:{port}/api/scenarios")
-    print(f"  stream     http://127.0.0.1:{port}/api/events?scenario=real_rep&speed=40")
+    # 0.0.0.0 only when asked, so local runs stay loopback-only by default
+    host = os.environ.get("SAATHI_BIND", "127.0.0.1")
+    srv = ThreadingHTTPServer((host, port), Handler)
+    print(f"saathi on http://{host}:{port}")
+    print(f"  app    {'served from web/out' if WEB_DIR.exists() else 'NOT BUILT -- cd web && npm run build'}")
+    print(f"  audio  {len(list(AUDIO_DIR.glob('*.wav'))) if AUDIO_DIR.exists() else 0} cached utterances")
     try:
         srv.serve_forever()
     except KeyboardInterrupt:
