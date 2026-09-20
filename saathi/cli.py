@@ -69,12 +69,53 @@ def main(argv=None) -> int:
     v.add_argument("--profile", default=None,
                    help="AWS profile; omit for standard credential resolution")
 
+    w = sub.add_parser("warm", help="render every scenario's audio once (setup step)")
+    w.add_argument("--profile", default=None)
+
     sub.add_parser("playbooks", help="list playbooks and what they will be asked for")
 
     args = ap.parse_args(argv)
 
     if args.cmd == "run":
         return show(args.scenario, args.goal)
+    if args.cmd == "warm":
+        from saathi import voice as V
+        from saathi.frames import build
+        names = sorted(p.stem for p in SCENARIO_DIR.glob("*.yaml"))
+        if not V.available(args.profile):
+            who = f"profile '{args.profile}'" if args.profile else "default credentials"
+            print(f"\n  Polly is not reachable with {who}.")
+            print("  Run `aws login`, or copy .voice-cache/ from a teammate.")
+            print("  Everything except audio works without it.\n")
+            return 2
+        made = cached = failed = 0
+        print(f"\n  warming {len(names)} scenarios (cached after the first run)\n")
+        for n in names:
+            sc = load(n)
+            frames = build(run(sc, sc.get("goal", "")), sc)
+            m = c = f = 0
+            for fr in frames:
+                aid, text, who = fr.get("audio"), fr.get("text"), fr.get("speaker")
+                if not (aid and text and who):
+                    continue
+                dest = V.CACHE / "wav" / f"{aid}.wav"
+                if dest.exists():
+                    c += 1
+                    continue
+                try:
+                    dest.parent.mkdir(parents=True, exist_ok=True)
+                    V.write_wav(dest, [V.synthesize(text, who, profile=args.profile)])
+                    m += 1
+                except Exception as e:
+                    print(f"    {n}: {e}")
+                    f += 1
+            made += m; cached += c; failed += f
+            print(f"    {n:22s} {m} rendered, {c} already cached"
+                  + (f", {f} FAILED" if f else ""))
+        print(f"\n  done: {made} rendered, {cached} cached, {failed} failed")
+        print(f"  audio lives in {V.CACHE}/wav (gitignored -- copy it to skip this)\n")
+        return 1 if failed else 0
+
     if args.cmd == "voice":
         from pathlib import Path as _P
         from saathi import voice as V

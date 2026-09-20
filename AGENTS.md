@@ -15,12 +15,23 @@ flattened it.
 ```bash
 python3 -m venv .venv && .venv/bin/pip install -r requirements.txt
 cd web && npm install && cd ..
+.venv/bin/python -m saathi.cli warm          # renders the call audio, once
 ```
 
-That is enough to run everything, including the audio — **no AWS account is
-needed**. Polly output is content-hashed into `.voice-cache/`, which is
-gitignored, so on a fresh clone the first call renders silently without voices
-unless you either copy that directory across or configure AWS (below).
+**Do not skip the third line, or the demo plays in silence.**
+
+`.voice-cache/` holds ~8MB of Polly-generated speech and is gitignored, so a
+fresh clone has no audio. `warm` renders all 8 scenarios in one go and is
+idempotent — it is keyed on voice and text, so re-running costs nothing and it
+does not re-render if the AWS account changes.
+
+Two ways to satisfy it:
+
+- **Copy `.voice-cache/` from a teammate.** Needs no AWS at all. Everything
+  including audio then works offline.
+- **Or configure AWS** (see *AWS* below) and let `warm` call Polly. It tells you
+  plainly if credentials are missing, and nothing else in the project depends on
+  them — tests, the detector and the UI all run without.
 
 ## Run it
 
@@ -31,13 +42,11 @@ cd web && npm run dev                               # http://localhost:3000
 .venv/bin/python -m saathi.cli table                # the measured scoreboard
 .venv/bin/python -m saathi.cli run --scenario voicebot_warm
 .venv/bin/python -m saathi.cli voice --scenario real_rep --out call.wav
+.venv/bin/python -m saathi.cli warm                 # re-render any missing audio
 ```
 
-`.voice-cache/` is gitignored because it is 8MB of generated audio. To voice the
-scenarios on a new machine, either copy that folder from someone who has it, or
-set up AWS (below) and run `saathi.cli voice --scenario <name>` once per
-scenario — it is cached forever after, keyed on voice and text, so it does not
-re-render when the account changes.
+Everything above runs offline once `warm` has been done — no credentials, no
+network, no DynamoDB table.
 
 ## House rules
 
