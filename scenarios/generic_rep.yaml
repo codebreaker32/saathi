@@ -1,0 +1,62 @@
+# The line an UNRECOGNISED company answers on.
+#
+# Without this, a problem naming any company outside the four hand-written
+# playbooks fell through to whatever scenario sorted first -- so a user who
+# typed "my nykaa order never arrived" heard Zomato's IVR and a rep scripted to
+# say "order 4471 ... Two hours, you said?". The transcript contradicted the
+# user's own words while the header said "THE COMPANY".
+#
+# So every line here is COMPANY-NEUTRAL and asserts nothing about the problem.
+# The rep acknowledges and looks it up; they never restate a detail, because any
+# detail they invented would be wrong for most callers. That is a real
+# constraint of a simulated line, not a stylistic choice: a scripted rep cannot
+# respond to a problem it was not written for, and pretending otherwise is how
+# the demo ends up lying about what the caller said.
+id: generic_rep
+org: The company
+line: "sim://generic"
+goal: "resolve the problem the user described"
+ring_ms: 5200
+start: root
+nodes:
+  root:
+    kind: menu
+    # An ADVISOR option is essential here, and its absence was a real bug: the
+    # goal on this line is whatever the user typed, so no menu label can be
+    # relied on to match it. navigate.choose() gives an explicit bonus to
+    # "advisor"/"representative"/"agent", which is the one branch that works for
+    # a problem nobody wrote a menu for. Without it the call abstained at the
+    # first menu and never reached a person at all -- the scoreboard caught it
+    # as a missed human.
+    prompt: "Thank you for calling. For an existing order press 1, for billing press 2, to speak to an advisor press 0."
+    options: {"1": queue, "2": queue, "0": queue}
+  queue:
+    kind: hold
+    wait_ms: 420000
+    announcements:
+      - {at_ms: 60000,  text: "Thanks for holding. An advisor will be with you shortly."}
+      - {at_ms: 240000, text: "Thanks for holding. You're next in the queue."}
+    then: party
+  party:
+    kind: party
+    persona:
+      truth: human
+      synthesis_score: 0.13
+      judge_binding: grounded
+      duplex: yield
+      gap_ms: 1500
+      turns:
+        - {say: "Customer support, this is Meera speaking. How can I help?", speak_ms: 2800}
+        - {say: "Thanks for explaining that. Let me pull the account up -- bear with me a moment.", speak_ms: 4400}
+        - {say: "Right, I can see it here. Let me check what I'm able to do for you.", speak_ms: 3800}
+      after_demand:
+        - {say: "Understood. Let me see what I can authorise on this.", speak_ms: 3200}
+        - say: "I can put through 450 rupees for this. Would that settle it?"
+          speak_ms: 3800
+          offer: {kind: refund, amount_paise: 45000}
+        - say: "That's done. I've logged it and someone will follow up with your user."
+          speak_ms: 4200
+          callback: true
+ground_truth:
+  truth: human
+  human_first_word_ms: 425200

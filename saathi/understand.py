@@ -72,6 +72,27 @@ _STOP = {"I", "My", "The", "A", "An", "It", "They", "We", "Their", "This",
 _BRAND = re.compile(r"^[A-Z][A-Za-z0-9&.-]{2,}$")
 
 
+# A small closed vocabulary, matched case-INSENSITIVELY, because people type
+# brand names in lower case constantly -- "my nykaa order never arrived" was the
+# report that prompted this. The capitalisation heuristic below cannot see those
+# and fell through to "the company", which then read as though Saathi had not
+# understood who the user meant.
+#
+# A list rather than a model, for the same reason PROBLEM_WORDS is a list: this
+# is a small closed vocabulary where matching is deterministic, instant and
+# testable, and the residue a model would earn is close to nothing. Unknown
+# brands still work -- they just rely on capitalisation.
+KNOWN_BRANDS = (
+    "amazon", "flipkart", "myntra", "nykaa", "ajio", "meesho", "snapdeal",
+    "zomato", "swiggy", "blinkit", "zepto", "bigbasket", "dunzo", "instamart",
+    "uber", "ola", "rapido", "redbus", "makemytrip", "goibibo", "ixigo",
+    "paytm", "phonepe", "gpay", "razorpay", "cred", "groww", "zerodha",
+    "airtel", "jio", "vodafone", "vi", "bsnl", "actfibernet", "hathway",
+    "tata", "croma", "reliance", "dmart", "lenskart", "pharmeasy", "1mg",
+    "urbancompany", "netflix", "hotstar", "spotify", "zomatogold",
+)
+
+
 def company_in(text: str) -> str | None:
     """Best guess at who the user is talking about.
 
@@ -80,6 +101,13 @@ def company_in(text: str) -> str | None:
     an ordinary English opener is the whole heuristic.
     """
     words = [w.strip(",.!?;:'\"") for w in text.split()]
+
+    # Closed vocabulary first: it is case-insensitive, so it catches the way
+    # people actually type. Title-cased on the way out so the UI reads cleanly.
+    for w in words:
+        if w.lower() in KNOWN_BRANDS:
+            return w if w[:1].isupper() else w.capitalize()
+
     cands = [w for w in words if _BRAND.match(w) and w not in _STOP]
     if not cands:
         return None

@@ -15,8 +15,9 @@ call.
   scenario             truth  fetched        t+  outcome
   -------------------------------------------------------
   bot_settles_refund   bot    False           -  correctly held
+  generic_rep          human  True        12.3s  correct
   ivr_only             bot    False           -  correctly held
-  menu_loop            human  True        17.3s  correct
+  menu_loop            human  True         9.7s  correct
   offer_below_mandate  bot    False           -  correctly held
   real_rep             human  True         7.2s  correct
   recorded_human       bot    False           -  correctly held
@@ -27,8 +28,8 @@ call.
 
   false fetches      0/6 machine calls
   95% upper bound    39.3%
-  missed humans      1/4
-  disclosed first    9/9   (ivr_only: never spoke, not measured)
+  missed humans      1/5
+  disclosed first    10/10   (ivr_only: never spoke, not measured)
 ```
 
 **Read that upper bound, not the zero.** Six machine calls cannot support a
@@ -42,6 +43,9 @@ calls. It is 39.3% because two more were added -- `bot_settles_refund` and
 the detector changed. A tighter interval bought by writing yourself more
 scenarios is arithmetic, not evidence, and the honest reading is still the one
 above: a bound over a corpus we wrote.
+
+`generic_rep` was added later still, for a company with no playbook of its own.
+It moved the human denominator from four to five and moved nothing else.
 
 Reproduce:
 

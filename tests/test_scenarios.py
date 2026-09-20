@@ -261,7 +261,8 @@ def test_synthesis_is_load_bearing_for_every_fetch():
         zeroed = {n: go(n).fetched_at_ms is not None for n in NAMES}
 
     assert hits[Family.SYNTHESIS], "the sabotage never fired; this proved nothing"
-    assert [n for n in NAMES if base[n]] == ["menu_loop", "real_rep", "terse_rep"]
+    assert [n for n in NAMES if base[n]] == [
+        "generic_rep", "menu_loop", "real_rep", "terse_rep"]
     assert not any(zeroed.values()), (
         "SYNTHESIS is no longer required by every fetch -- if a real model has "
         "been wired, update stream.SCRIPTED_FAMILIES, the family table in "
