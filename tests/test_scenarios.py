@@ -148,3 +148,80 @@ def test_a_line_that_never_answers_is_simply_waited_out():
     o = go("ivr_only")
     assert o.fetched_at_ms is None and o.probes_used == 0
     assert o.beats[-1].t_ms > 1_000_000, "it really did hold for 15+ minutes"
+
+
+# --------------------------------------------------------------------------- #
+# Which families does each verdict actually depend on?
+#
+# Measured, not assumed: sabotaging SYNTHESIS so it votes "human" on every bot
+# scenario still produces zero false fetches, because the other four families
+# carry the result. That is reassuring about the DESIGN -- coverage is real --
+# and damning about the TEST, because it means a green suite says nothing about
+# whether SYNTHESIS works. Rather than leave that implicit, measure it.
+# --------------------------------------------------------------------------- #
+
+import saathi.simulate as _sim
+from saathi.types import Family, SignalObservation as _Obs
+
+
+def _sabotage(family, llr):
+    """Force one family to vote a fixed way, to see if anything depends on it."""
+    orig = _sim.SignalObservation
+
+    class Forced:
+        def __new__(cls, *a, **k):
+            fam = k.get("family") if "family" in k else (a[1] if len(a) > 1 else None)
+            if fam is family:
+                if "llr" in k:
+                    k = {**k, "llr": llr}
+                elif len(a) > 2:
+                    a = (a[0], a[1], llr, *a[3:])
+            return orig(*a, **k)
+
+    return orig, Forced
+
+
+@pytest.mark.parametrize("family", [Family.SYNTHESIS, Family.CONTINGENCY,
+                                    Family.DUPLEX, Family.REPETITION])
+def test_no_single_family_can_cause_a_false_fetch(family):
+    """Sabotage one family into voting 'human' everywhere; the machines must
+    still be held.
+
+    Proves: the three-family gate is genuine defence in depth -- no single
+    family, compromised or broken, can fetch the user for a machine.
+    Does NOT prove: that the family works. It proves the opposite is survivable.
+    """
+    orig, forced = _sabotage(family, 1.5)
+    _sim.SignalObservation = forced
+    try:
+        for name in ("voicebot_warm", "voicebot_disclosed", "recorded_human", "ivr_only"):
+            sc = load(name)
+            assert not run(sc, sc.get("goal", "")).false_fetch, \
+                f"{name} false-fetched with {family.value} sabotaged"
+    finally:
+        _sim.SignalObservation = orig
+
+
+def test_synthesis_is_currently_load_bearing_for_nothing():
+    """A green suite does not certify SYNTHESIS, and this records why.
+
+    SYNTHESIS is a scripted stand-in (see stream.SCRIPTED_FAMILIES). Removing
+    it entirely changes no scenario outcome, which is exactly why the UI still
+    renders it amber. When a real model lands, this test should START FAILING
+    -- that failure is the signal the family has begun to matter.
+    """
+    orig, forced = _sabotage(Family.SYNTHESIS, 0.0)   # remove its vote entirely
+    _sim.SignalObservation = forced
+    try:
+        changed = []
+        for p in sorted(SCENARIO_DIR.glob("*.yaml")):
+            sc = load(p.stem)
+            if (run(sc, sc.get("goal", "")).fetched_at_ms is not None) != \
+               (go(p.stem).fetched_at_ms is not None):
+                changed.append(p.stem)
+    finally:
+        _sim.SignalObservation = orig
+    assert changed == [], (
+        "SYNTHESIS now changes outcomes in " + ", ".join(changed) +
+        " -- if a real model has been wired, update SCRIPTED_FAMILIES and this test"
+    )
