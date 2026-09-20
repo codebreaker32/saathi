@@ -119,15 +119,38 @@ def company_in(text: str) -> str | None:
     return cands[0]
 
 
-def understand(text: str, playbooks: dict[str, Playbook] | None = None
-               ) -> Understanding:
+def understand(text: str, playbooks: dict[str, Playbook] | None = None,
+               company: str | None = None) -> Understanding:
+    """`company` is the name the user TYPED, and it beats every guess here.
+
+    Guessing the company from free text is a losing game: capitalisation misses
+    "nykaa", a closed vocabulary misses "savana", and every brand that does not
+    exist yet defeats both. Asking is one input box and it is always right. The
+    extraction below stays as a fallback for callers that have only prose.
+    """
     pbs = playbooks or load_all()
+    # Only the leading letter, and only when the user typed it all lower case:
+    # "savana" reads as Savana, "BigBasket" keeps its own shape, and "1mg" is
+    # left alone. str.title() capitalises after digits too and turned 1mg into
+    # 1Mg, which is a brand name the user did not type.
+    company = (company or "").strip()
+    if company and company.islower() and company[:1].isalpha():
+        company = company[0].upper() + company[1:]
     # The generic playbook is the floor, not a competitor: it matches nothing by
     # name, so scoring it alongside the real ones would let it tie at zero and
     # win on sort order.
     specific = {k: v for k, v in pbs.items() if k != GENERIC_ID}
-    scored = sorted(((*_score(p, text), p) for p in specific.values()),
-                    key=lambda x: -x[0]) or [(0, [], None)]
+    # A typed company is matched against the real playbooks first, so naming
+    # "Zomato" still routes to Zomato's line rather than the generic one.
+    if company:
+        named = [p for p in specific.values()
+                 if p.company.lower().split()[0] == company.lower().split()[0]]
+        scored = sorted(((_score(p, company + " " + text)[0] + 3,
+                          [f"you said {company}"], p) for p in named),
+                        key=lambda x: -x[0]) or [(0, [], None)]
+    else:
+        scored = sorted(((*_score(p, text), p) for p in specific.values()),
+                        key=lambda x: -x[0]) or [(0, [], None)]
     top, hits, pb = scored[0]
 
     # THE COMPANY MUST BE NAMED. _score gives +3 for the company and +2 for a
@@ -144,7 +167,7 @@ def understand(text: str, playbooks: dict[str, Playbook] | None = None
             return Understanding(None, {}, "none",
                                  "no playbook matched -- name the company and "
                                  "what went wrong")
-        named = company_in(text)
+        named = company or company_in(text)
         if named:
             generic = replace(generic, company=named)
         # Facts still go through the generic playbook's own whitelist, so an

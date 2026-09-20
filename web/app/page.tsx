@@ -76,6 +76,7 @@ export default function Page() {
   const [det, setDet] = useState<Frame | null>(null);
   const [phase, setPhase] = useState("Dialling");
   const [toNumber, setToNumber] = useState("");
+  const [company, setCompany] = useState("");
   const [tel, setTel] = useState<{live: boolean; why: string; from_number: string | null} | null>(null);
 
   // Whether a number typed below will actually be dialled. Asked once, and
@@ -131,7 +132,7 @@ export default function Page() {
     try {
       const r = await fetch(`${API}/api/understand`, {
         method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ text: problem }),
+        body: JSON.stringify({ text: problem, company: company.trim() }),
       }).then(x => x.json());
       setUnderstood(r);
       if (r.scenarios?.length) setScenario(r.scenarios[0].id);
@@ -200,6 +201,7 @@ export default function Page() {
         facts: { registered_phone: "98765 41182", ...(understood?.facts ?? {}) },
         mandate: mandate?.mandate ?? {},
         to_number: toNumber.trim(),
+        company: company.trim(),
       }),
     }).then(r => r.json()).catch(() => ({ session: "" }));
 
@@ -249,6 +251,7 @@ export default function Page() {
   function reset() {
     es.current?.close(); audio.current?.pause();
     setStage("brief"); setUnderstood(null); setMandate(null); setMandateText("");
+    setCompany("");
   }
 
   const voted: string[] = det?.voted ?? [];
@@ -273,7 +276,20 @@ export default function Page() {
             <Beat n="2" t="Saathi waits" d="Menus, hold music, all of it." />
             <Beat n="3" t="You take over" d="Only when a person answers." />
           </div>
-          <label className="eyebrow">What went wrong?</label>
+          {/* ASKED, not inferred. Guessing the company from prose is a losing
+              game -- capitalisation misses "nykaa", a word list misses "savana",
+              and every brand that does not exist yet defeats both. One input box
+              is always right. */}
+          <label className="eyebrow">Who are you calling?</label>
+          <input className="mt-2" value={company} placeholder="Zomato, Nykaa, your broadband provider..."
+            onChange={e => setCompany(e.target.value)}
+            style={{ width: "100%", padding: "10px 12px", borderRadius: 10,
+                     border: "1px solid var(--border)", background: "var(--surface-2)",
+                     color: "var(--foreground)", fontSize: 14 }} />
+
+          <label className="eyebrow" style={{ display: "block", marginTop: 18 }}>
+            What went wrong?
+          </label>
           <textarea className="mt-2" rows={4} value={problem}
             onChange={e => setProblem(e.target.value)} />
           <p className="text-[12px] mt-3" style={{ color: "var(--faint)" }}>
@@ -281,7 +297,8 @@ export default function Page() {
             type one it gets removed before anything is said out loud.
           </p>
           <div className="flex gap-2 mt-5">
-            <button className="btn primary" onClick={understand} disabled={busy || !problem.trim()}>
+            <button className="btn primary" onClick={understand}
+              disabled={busy || !problem.trim() || !company.trim()}>
               {busy ? "Reading…" : "Continue"}
             </button>
           </div>

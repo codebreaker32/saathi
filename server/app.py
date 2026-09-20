@@ -347,14 +347,16 @@ class Handler(BaseHTTPRequestHandler):
                 "playbook": body.get("playbook"),
                 "mandate": body.get("mandate") or {},
                 "to_number": (body.get("to_number") or "").strip(),
+                "company": (body.get("company") or "").strip(),
             }
             return self._json({"session": sid})
 
         if u.path == "/api/understand":
             n = int(self.headers.get("Content-Length", 0))
-            text = json.loads(self.rfile.read(n) or b"{}").get("text", "")
+            _b = json.loads(self.rfile.read(n) or b"{}")
+            text = _b.get("text", "")
             from saathi.understand import understand
-            un = understand(text)
+            un = understand(text, company=_b.get("company"))
             pb = un.playbook
             return self._json({
                 "matched": pb is not None,
@@ -479,6 +481,13 @@ class Handler(BaseHTTPRequestHandler):
                 from saathi.playbook import build_brief, load_all
                 pb = load_all().get(sess["playbook"])
                 if pb:
+                    # The generic playbook is company-agnostic by design, so the
+                    # name the user typed is what makes the brief say who is
+                    # being called. Without this the call still ran, but every
+                    # unrecognised company was "the company".
+                    typed = sess.get("company")
+                    if typed:
+                        pb = dataclasses.replace(pb, company=typed)
                     brief = build_brief(pb, sess.get("problem", ""),
                                         sess.get("facts", {}))
             except Exception as e:                       # never fail the call
