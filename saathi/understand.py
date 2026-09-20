@@ -14,7 +14,7 @@ problem text, where the scrubber removes it.
 from __future__ import annotations
 
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 
 from saathi.playbook import build_brief, load_all
 from saathi.types import Playbook
@@ -31,7 +31,12 @@ PROBLEM_WORDS = {
 # "4471," followed by "rs" and the order number becomes the amount.
 _NUM = r"\d{1,3}(?:,\d{2,3})*|\d+"
 AMOUNT = re.compile(rf"(?:rs\.?|₹|inr)\s*({_NUM})|\b({_NUM})\s*(?:rupees|rs\b)", re.I)
-ORDER = re.compile(r"\border(?:\s*(?:id|no|number|#))?\s*[:#]?\s*([A-Z0-9-]{4,16})\b", re.I)
+# The token must CONTAIN A DIGIT. Without that, "my order never arrived" parsed
+# as order id "never", and a fabricated order number is worse than none: it
+# travels in the brief and Saathi reads it out to the company.
+ORDER = re.compile(
+    r"\border(?:\s*(?:id|no|number|#))?\s*[:#]?\s*((?=[A-Z0-9-]*\d)[A-Z0-9-]{4,16})\b",
+    re.I)
 
 
 @dataclass(frozen=True)
@@ -57,15 +62,76 @@ def _score(pb: Playbook, text: str) -> tuple[int, list[str]]:
     return pts, hits
 
 
+GENERIC_ID = "generic.unknown"
+
+# A brand is a capitalised word that is not the first word of the sentence and
+# not an ordinary one. Crude on purpose: the cost of a wrong guess here is a
+# label on a screen, and the alternative was refusing to proceed at all.
+_STOP = {"I", "My", "The", "A", "An", "It", "They", "We", "Their", "This",
+         "There", "Order", "Rs", "INR", "Please", "Hi", "Hello"}
+_BRAND = re.compile(r"^[A-Z][A-Za-z0-9&.-]{2,}$")
+
+
+def company_in(text: str) -> str | None:
+    """Best guess at who the user is talking about.
+
+    Crude on purpose: the cost of a wrong guess is a label on a screen, and the
+    alternative was refusing to proceed at all. A capitalised word that is not
+    an ordinary English opener is the whole heuristic.
+    """
+    words = [w.strip(",.!?;:'\"") for w in text.split()]
+    cands = [w for w in words if _BRAND.match(w) and w not in _STOP]
+    if not cands:
+        return None
+    # Prefer a brand that is not the first word; a sentence-initial capital is
+    # weaker evidence, but it still beats nothing.
+    for i, w in enumerate(words):
+        if w in cands and i > 0:
+            return w
+    return cands[0]
+
+
 def understand(text: str, playbooks: dict[str, Playbook] | None = None
                ) -> Understanding:
     pbs = playbooks or load_all()
-    scored = sorted(((*_score(p, text), p) for p in pbs.values()),
-                    key=lambda x: -x[0])
+    # The generic playbook is the floor, not a competitor: it matches nothing by
+    # name, so scoring it alongside the real ones would let it tie at zero and
+    # win on sort order.
+    specific = {k: v for k, v in pbs.items() if k != GENERIC_ID}
+    scored = sorted(((*_score(p, text), p) for p in specific.values()),
+                    key=lambda x: -x[0]) or [(0, [], None)]
     top, hits, pb = scored[0]
+
+    # THE COMPANY MUST BE NAMED. _score gives +3 for the company and +2 for a
+    # problem word, so a bare "my order is late" scored 2 and claimed whichever
+    # delivery playbook sorted first -- a Flipkart complaint was routed to
+    # Amazon. Claiming the wrong company is worse than admitting we do not know
+    # it, because the brief is built from the playbook.
+    if top < 3:
+        top = 0
+
     if top == 0:
-        return Understanding(None, {}, "none",
-                             "no playbook matched -- name the company and what went wrong")
+        generic = pbs.get(GENERIC_ID)
+        if generic is None:
+            return Understanding(None, {}, "none",
+                                 "no playbook matched -- name the company and "
+                                 "what went wrong")
+        named = company_in(text)
+        if named:
+            generic = replace(generic, company=named)
+        # Facts still go through the generic playbook's own whitelist, so an
+        # unknown company gets the same air gap as a known one.
+        facts: dict[str, str] = {}
+        safe = {f.field for f in generic.safe_fields()}
+        if (m := ORDER.search(text)) and "order_id" in safe:
+            facts["order_id"] = m.group(1)
+        if (m := AMOUNT.search(text)) and "amount" in safe:
+            facts["amount"] = (m.group(1) or m.group(2)).replace(",", "")
+        return Understanding(
+            generic, facts, "low",
+            (f"no playbook for {named}" if named else "no company recognised")
+            + " -- Saathi will state the problem and ask for a reference number, "
+              "and will not agree to anything")
 
     facts: dict[str, str] = {}
     safe = {f.field for f in pb.safe_fields()}

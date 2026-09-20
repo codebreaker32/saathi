@@ -11,6 +11,7 @@ from __future__ import annotations
 import hashlib
 
 from saathi.stream import PROTOCOL, SCRIPTED_FAMILIES
+from saathi.summary import conclude, next_actions, timing
 
 SPEAKER_OF = {
     "[menu]": "menu", "[queue]": "queue", "[machine]": "bot",
@@ -61,7 +62,12 @@ def _kind(beat) -> str:
     return "utterance"
 
 
-def build(outcome, scenario: dict, *, speed: float = 40.0) -> list[dict]:
+def build(outcome, scenario: dict, *, speed: float = 40.0,
+          speech_ms: int | None = None) -> list[dict]:
+    """`speech_ms` is how much of the call was actually speech, when the
+    caller has measured it from rendered audio. Left None it stays None --
+    the summary then reports time on the line and says nothing about hold,
+    rather than inventing a figure."""
     frames: list[dict] = []
     seq = 0
 
@@ -89,9 +95,7 @@ def build(outcome, scenario: dict, *, speed: float = 40.0) -> list[dict]:
                 "decision": head[0] if head else "UNDECIDED",
                 "score": float(head[-1].split("=")[-1]) if "=" in b.text else 0.0,
                 "reason": b.note or "",
-                "voted": [f for f in ("SYNTHESIS", "IDENTITY", "REPETITION",
-                                      "CONTINGENCY", "DUPLEX")
-                          if f in (b.note or "")],
+                "voted": list(b.families),
                 "veto": "vetoed" in (b.note or ""),
             }
             body["scripted"] = sorted(SCRIPTED_FAMILIES & set(body["voted"]))
@@ -107,5 +111,14 @@ def build(outcome, scenario: dict, *, speed: float = 40.0) -> list[dict]:
         handed_off=outcome.handed_off_at_ms is not None,
         false_fetch=outcome.false_fetch,
         truth=outcome.truth,
-        probes=outcome.probes_used)
+        probes=outcome.probes_used,
+        # The dashboard. Assembled from what was recorded AS THE CALL RAN --
+        # notes are appended at the moment each thing happens, so a refused
+        # offer survives even though it leaves nothing in the transcript to
+        # re-parse afterwards.
+        conclusion=conclude(outcome),
+        timing=timing(outcome, speech_ms),
+        next_actions=next_actions(outcome),
+        notes=[{"t_ms": n.t_ms, "kind": n.kind, "text": n.text, "detail": n.detail}
+               for n in outcome.notes])
     return frames

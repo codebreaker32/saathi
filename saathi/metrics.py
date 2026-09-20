@@ -45,6 +45,7 @@ class Row:
     missed: bool
     time_to_fetch_ms: int | None
     handed_off: bool
+    spoke: bool
     probes: int
     disclosed_first: bool
 
@@ -78,7 +79,8 @@ class Summary:
         out = [f"  {'scenario':{w}}{'truth':7}{'fetched':9}{'t+':>8}  outcome",
                "  " + "-" * (w + 34)]
         for r in self.rows:
-            t = f"{r.time_to_fetch_ms/1000:.1f}s" if r.time_to_fetch_ms else "-"
+            t = (f"{r.time_to_fetch_ms/1000:.1f}s"
+                 if r.time_to_fetch_ms is not None else "-")
             if r.false_fetch:
                 verdict = "FALSE FETCH"
             elif r.missed and r.handed_off:
@@ -91,6 +93,10 @@ class Summary:
                 verdict = "correctly held"
             out.append(f"  {r.name:{w}}{r.truth:7}{str(r.fetched):9}{t:>8}  {verdict}")
 
+        # Only a call where we actually said something can be ordered, so the
+        # rest are excluded rather than counted as passes.
+        spoke = [r for r in self.rows if r.spoke]
+        silent = [r.name for r in self.rows if not r.spoke]
         n, k = self.machine_calls, self.false_fetches
         out += [
             "",
@@ -99,8 +105,10 @@ class Summary:
             f"   <- quote THIS, not {k/n*100 if n else 0:.0f}%",
             f"  missed humans      {self.missed}/{self.human_calls}"
             f"   (recoverable: the rep hangs up, we retry)",
-            f"  disclosed first    {sum(r.disclosed_first for r in self.rows)}"
-            f"/{len(self.rows)}",
+            f"  disclosed first    {sum(r.disclosed_first for r in spoke)}"
+            f"/{len(spoke)}" + (
+                f"   ({', '.join(silent)}: never spoke, not measured)"
+                if silent else ""),
             "",
             f"  With {n} machine call{'s' if n != 1 else ''} the interval is wide "
             f"by construction.",
@@ -116,6 +124,6 @@ def summarise(named_outcomes) -> Summary:
             name=name, truth=o.truth, fetched=o.fetched_at_ms is not None,
             false_fetch=o.false_fetch, missed=o.missed_human,
             time_to_fetch_ms=o.time_to_fetch_ms,
-            handed_off=o.handed_off_at_ms is not None,
+            handed_off=o.handed_off_at_ms is not None, spoke=o.we_spoke,
             probes=o.probes_used, disclosed_first=o.disclosed_before_speaking))
     return Summary(rows)

@@ -144,7 +144,7 @@ account.
 
 | Finishes alone | Always reaches you |
 |---|---|
-| status queries, chasing a ticket, stating the problem, taking a reference number, accepting inside the mandate | refunds to a card, cancellations, address changes, plan changes |
+| status queries, chasing a ticket, stating the problem, accepting inside the mandate | refunds to a card, cancellations, address changes, plan changes, **anything where they read out a number** |
 
 That is the thesis arriving as a practical fact, and it means **handoff quality
 is the product** — summon speed, whether the rep is left in silence, how cleanly
@@ -154,8 +154,7 @@ the handoff beats anything that makes the agent more autonomous.
 A second thing real telephony will remove: some IVRs authenticate by caller ID
 (*"you're calling from the registered number, so you're verified"*). The agent
 dials from its own number, fails that check, and lands in manual verification
-regardless. `test_caller_id_verification_scenario` exercises that path now so
-the first real call is not a surprise.
+regardless. Nothing exercises that path yet — see *Where this loses*.
 
 ## Where this loses
 
@@ -171,6 +170,15 @@ the first real call is not a surprise.
   the cost of running one against you, never that it solves it.
 - **Nothing is validated against a real support queue**, so the open questions
   about unit economics and how support organisations would react stay open.
+- **Caller-ID authentication is unmodelled.** No scenario covers an IVR that
+  verifies by the number you are calling from, so the path where the agent fails
+  that check and drops into manual verification is untested.
+- **Saathi cannot write down a reference number.** The digit backstop hands the
+  call over on any unrecognised 4-8 digit run, and *"your reference is 8842213"*
+  is indistinguishable from *"read me the code we sent you"*. Handing over is
+  the right failure -- one interruption against an identity-leak-shaped
+  incident -- but it means a spoken reference number always costs a fetch, and
+  the *Finishes alone* column above is narrower than it looks.
 - **Twilio Media Streams cannot send DTMF toward the call** — inbound only —
   which rules out the obvious Twilio design for menu navigation. LiveKit's SIP
   participant handles it. Domestic Indian numbers need a licensed operator

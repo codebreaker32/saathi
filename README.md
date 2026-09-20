@@ -12,27 +12,36 @@ call.
 ## Results
 
 ```
-  scenario            truth  fetched        t+  outcome
-  ------------------------------------------------------
-  ivr_only            bot    False           -  correctly held
-  menu_loop           human  True        17.3s  correct
-  real_rep            human  True         7.2s  correct
-  recorded_human      bot    False           -  correctly held
-  terse_rep           human  True        10.6s  correct
-  verify_immediately  human  False           -  handed over (verification)
-  voicebot_disclosed  bot    False           -  correctly held
-  voicebot_warm       bot    False           -  correctly held
+  scenario             truth  fetched        t+  outcome
+  -------------------------------------------------------
+  bot_settles_refund   bot    False           -  correctly held
+  ivr_only             bot    False           -  correctly held
+  menu_loop            human  True        17.3s  correct
+  offer_below_mandate  bot    False           -  correctly held
+  real_rep             human  True         7.2s  correct
+  recorded_human       bot    False           -  correctly held
+  terse_rep            human  True        10.6s  correct
+  verify_immediately   human  False           -  handed over (verification)
+  voicebot_disclosed   bot    False           -  correctly held
+  voicebot_warm        bot    False           -  correctly held
 
-  false fetches      0/4 machine calls
-  95% upper bound    52.7%
+  false fetches      0/6 machine calls
+  95% upper bound    39.3%
   missed humans      1/4
-  disclosed first    8/8
+  disclosed first    9/9   (ivr_only: never spoke, not measured)
 ```
 
-**Read that upper bound, not the zero.** Four machine calls cannot support a
+**Read that upper bound, not the zero.** Six machine calls cannot support a
 strong claim, and the interval says so. Roughly 300 machine calls with no false
 fetch would be needed to claim under 1%. The scoreboard prints the bound rather
 than the point estimate so that the number cannot be quoted flatteringly.
+
+**And read why it moved.** This bound was 52.7% when there were four machine
+calls. It is 39.3% because two more were added -- `bot_settles_refund` and
+`offer_below_mandate`, written here to exercise the offer path. Nothing about
+the detector changed. A tighter interval bought by writing yourself more
+scenarios is arithmetic, not evidence, and the honest reading is still the one
+above: a bound over a corpus we wrote.
 
 Reproduce:
 
@@ -61,13 +70,21 @@ Five families of evidence, each catching a different kind of machine. **Three
 must agree**, and that count is an `if` rather than an implication of the
 arithmetic — a miscalibration can break a sum, but it cannot break a count.
 
-| Family | Catches |
-|---|---|
-| `SYNTHESIS` | the undisclosed generative bot |
-| `REPETITION` | recordings, hold loops, canned greetings — in-call and **across calls** |
-| `CONTINGENCY` | anything following a script |
-| `DUPLEX` | half-duplex bots that talk through you |
-| `DISCLOSURE` | bots that admit it — a **veto**, not a vote |
+| Family | Catches | Can vote *for* a human? |
+|---|---|---|
+| `SYNTHESIS` | the undisclosed generative bot | yes — **scripted stand-in today** |
+| `REPETITION` | recordings, hold loops, canned greetings — in-call and **across calls** | no |
+| `CONTINGENCY` | anything following a script | yes |
+| `DUPLEX` | half-duplex bots that talk through you | yes |
+| `DISCLOSURE` | bots that admit it — a **veto**, not a vote | no |
+
+**Three of five is really three of three.** Every `REPETITION` and `DISCLOSURE`
+weight in the package is negative, so only three families can ever produce a
+positive score. With `MIN_POSITIVE_FAMILIES = 3` the quorum has exactly one
+satisfiable solution — and the scripted `SYNTHESIS` is mandatory in it.
+`test_synthesis_is_load_bearing_for_every_fetch` measures that by zeroing it,
+which removes all three fetches. That is a limitation of this build, not
+redundancy.
 
 The `recorded_human` scenario is why there is more than one. A canned greeting
 recorded from a real person is acoustically genuine, so the synthesis model

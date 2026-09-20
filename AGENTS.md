@@ -18,6 +18,19 @@ cd web && npm install && cd ..
 .venv/bin/python -m saathi.cli warm          # renders the call audio, once
 ```
 
+On **Windows** there is no `bin/` and PowerShell has no `&&`. Everything works,
+but every command below needs translating, so it is written out once here:
+
+```powershell
+python -m venv .venv
+.venv\Scripts\python.exe -m pip install -r requirements.txt
+cd web; npm install; cd ..
+.venv\Scripts\python.exe -m saathi.cli warm
+```
+
+Read `.venv/bin/python` as `.venv\Scripts\python.exe` throughout, and replace
+the backgrounding `&` on `server/app.py` with a second terminal.
+
 **Do not skip the third line, or the demo plays in silence.**
 
 `.voice-cache/` holds ~8MB of Polly-generated speech and is gitignored, so a
@@ -27,8 +40,10 @@ does not re-render if the AWS account changes.
 
 Two ways to satisfy it:
 
-- **Copy `.voice-cache/` from a teammate.** Needs no AWS at all. Everything
-  including audio then works offline.
+- **Copy `.voice-cache/` from a teammate.** Needs no AWS for the demo: the
+  server and the UI read the cache directly, audio included. `cli voice` and
+  `cli warm` still probe Polly on startup and will exit 2 without credentials,
+  but nothing else needs them.
 - **Or configure AWS** (see *AWS* below) and let `warm` call Polly. It tells you
   plainly if credentials are missing, and nothing else in the project depends on
   them — tests, the detector and the UI all run without.
@@ -36,17 +51,25 @@ Two ways to satisfy it:
 ## Run it
 
 ```bash
-.venv/bin/python -m pytest -q                       # 246 tests, offline, no credentials
+.venv/bin/python -m pytest -q                       # 251 tests (250 pass, 1 skip), offline
 .venv/bin/python server/app.py 8787 &               # SSE stream + audio
 cd web && npm run dev                               # http://localhost:3000
 .venv/bin/python -m saathi.cli table                # the measured scoreboard
 .venv/bin/python -m saathi.cli run --scenario voicebot_warm
 .venv/bin/python -m saathi.cli voice --scenario real_rep --out call.wav
 .venv/bin/python -m saathi.cli warm                 # re-render any missing audio
+.venv/bin/python -m bench.leak                      # is the audio corpus quotable? (no)
+.venv/bin/python -m bench.corpus --build -n 70      # two-engine channel-matched corpus
 ```
 
-Everything above runs offline once `warm` has been done — no credentials, no
-network, no DynamoDB table.
+`pytest`, `cli table`, `cli run`, `cli playbooks`, `server/app.py` and the web
+UI run offline — no credentials, no network, no DynamoDB table.
+
+**`cli voice` and `cli warm` are the exceptions.** Both gate on
+`voice.available()` (`saathi/cli.py:85`, `:122`), which shells out to a live
+`aws polly describe-voices` on *every* invocation. A warm cache does not bypass
+it, so they exit 2 without AWS even when every clip is already rendered — and
+the AWS CLI itself is a prerequisite for those two.
 
 ## House rules
 
@@ -134,13 +157,16 @@ detector verdict deliberately has no model in it, and `saathi/llm.py` speaks to
 any OpenAI-compatible endpoint (`ollama` locally, plus groq/xai/openrouter/
 gemini/deepseek/together by name).
 
-## The anti-spoofing question — settled, see `research/antispoof-findings.md`
+## The anti-spoofing question — settled on the amber marker only
 
 `SYNTHESIS` and `IDENTITY` render amber because they are **scripted stand-ins**,
 not measured models. We investigated whether a real anti-spoofing model could
 replace them. **It cannot, on this corpus, and the amber marker must stay.**
 
-Three things were measured, with real corpora and real AASIST weights:
+`research/antispoof-findings.md` holds five reports: three ground
+investigations and two adversarial reviews, **both of which broke the proposed
+deliverable**. The ground measurements, with real corpora and real AASIST
+weights:
 
 - Pointed at today's all-Polly corpus, the model ranks the demo's **human rep as
   more synthetic than the bot** — AUC 0.317, i.e. backwards. Both voices are
@@ -151,21 +177,94 @@ Three things were measured, with real corpora and real AASIST weights:
 - 96 utterances from 8 speakers is not 96 samples. ICC is 0.54-0.79, so
   intervals must be **speaker-clustered**, not utterance-bootstrapped.
 
-The recommendation, which we agree with: ship the model as an **offline bench
-with an honest table** — *"AUC 0.69 [0.55, 0.83], speaker-clustered, 8 speakers,
-2 generators"* — rather than as a green bar. That is the number a sceptical
-reader would have asked for, and a better artefact than a bar.
+Report 3 proposed shipping that as an **offline bench table** — *"AUC 0.69
+[0.55, 0.83], speaker-clustered, 8 speakers, 2 generators"* — calling it "a real,
+defensible, quotable result". **Two adversarial reviews then broke that table.**
+Do not ship it:
 
-`tests/test_scenarios.py::test_synthesis_is_currently_load_bearing_for_nothing`
-is written to **start failing** when a real model is wired. That failure is the
-signal to update `stream.SCRIPTED_FAMILIES`.
+- **Corpus composition swamps the interval** (high). Holding model, channel and
+  synthetic side byte-identical, leave-k-speakers-out moves AUC 0.481-0.869 and
+  EER 25.0-53.9% — wider than the quoted CI. A reader sees "[0.55, 0.83]" and
+  infers the remaining uncertainty is sampling noise; the dominant term is a
+  corpus-selection effect the interval is silent about. An amber marker can be
+  discounted at zero cost; a bootstrap CI cannot.
+- **A voice-free scalar beats the model** (critical). Polly renders to a buffer,
+  so its pauses are bit-exact digital zero (-309 dB), while recorded speech
+  always carries a noise floor. "Level of the quietest frame" — no voice
+  content whatsoever — scores AUC 0.954 human-vs-Polly against AASIST's 0.855
+  on identical files through an identical chain. Any number from this corpus is
+  uninterpretable: it is equally consistent with a model reading synthesis
+  artefacts and with one reading "this file was written, not recorded". That
+  distinction cannot exist in production.
+
+`tests/test_scenarios.py::test_synthesis_is_load_bearing_for_every_fetch` records
+the consequence. Only `CONTINGENCY`, `DUPLEX` and `SYNTHESIS` can ever vote
+positive, so with `MIN_POSITIVE_FAMILIES = 3` the scripted family is required by
+**every** fetch — zeroing it removes all three. The previous version of that
+test asserted the opposite and could not fail: it computed its baseline inside
+its own sabotage window, comparing a sabotaged run against a sabotaged run.
 
 ## Next, roughly in order
 
-1. Publish the anti-spoofing bench table in `README.md` (do **not** turn the bar
-   green). The corpus recipe and the stdlib channel chain are described in
-   `research/antispoof-findings.md`; torch belongs in a separate
-   `requirements-bench.txt`, not the main install.
+1. **Do not publish a bench table yet.** Two controls disqualify the corpus,
+   and they are prerequisites rather than footnotes:
+   - **Leak battery — BUILT.** `bench/leak.py`, pure stdlib, no numpy and no
+     build-time dependency near the runtime path. It scores eight voice-free
+     scalars and refuses any corpus where one of them beats chance.
+
+     ```
+     python -m bench.leak                                  # the shipped cache
+     python -m bench.leak --group a=dirA --group b=dirB    # two provenances
+     ```
+
+     **Its verdict on this repo's own audio is DISQUALIFIED.** 24 of 37 cached
+     clips carry bit-exact digital silence, which is the absence of a noise
+     floor rather than a quiet one; no microphone produces it and nothing that
+     crossed a carrier can have it. With one provenance class it refuses to
+     emit an AUC at all rather than report a figure it could not compute.
+     Pointed at a real contrast it is decisive: on eight buffer-written against
+     eight microphone-like clips, identical but for the floor, six of the eight
+     scalars separate at AUC 1.000 without hearing a word.
+
+     `tests/test_leak_battery.py` carries the control that matters — a corpus
+     the battery must PASS. A gate that can only ever say DISQUALIFIED is a
+     constant, and the catching test would certify nothing without it.
+     `test_the_projects_own_audio_is_disqualified` is written to start failing
+     once real recorded audio lands.
+   - **Channel chain and two-engine corpus — BUILT.** `bench/channel.py`
+     (band-limit 300-3400, G.711 mu-law hand-rolled because `audioop` is gone
+     in 3.13, 20 dB line noise, optional level jitter) and `bench/corpus.py`
+     (content-matched, channel-matched, 70 utterances per engine).
+
+     **It was run, and the result is worth reading before you plan any more
+     channel work.** Polly against Windows SAPI, same sentences, same chain:
+     raw, all eight voice-free scalars leak at ~1.000. The chain kills the
+     digital-silence confound outright (`zero_frame_fraction` 1.000 -> 0.500,
+     exactly chance). Level jitter then kills the loudness confound
+     (`rms_dbfs` 1.000 -> 0.605). And the corpus is STILL DISQUALIFIED, now by
+     relative measures gain cannot touch — `p5_frame_db` 0.934,
+     `crest_factor` 0.871, `duration_s` 0.902.
+
+     Three rounds of honest engineering moved the worst leak from 1.000 to
+     0.934 and never came near the 0.60 ceiling. Two deterministic generators
+     produce two tight distributions on every axis you can measure; real speech
+     does not, and that variation cannot be manufactured because manufacturing
+     it is choosing the answer. Full numbers in
+     `research/channel-matching-findings.md`.
+
+   - **Corpus-composition sensitivity gate — still to do.** Recompute the
+     headline on every leave-k-speakers-out subset and assert
+     `span < width(cluster_CI)`. It needs per-speaker labels, so it is blocked
+     on the same real audio as everything else. Today the span is 0.481-0.869
+     against a CI width of 0.28. Make it a test that fails the build, not a
+     line in a risk list.
+
+   The fix for both is **real recorded audio on the human side**; the research
+   doc's cheapest honest start is ~10 lines of the rep script recorded on an
+   actual phone. Injecting a synthetic noise floor is not a fix — it patches
+   the one scalar that got caught and leaves the others leaking. The corpus
+   recipe and stdlib channel chain are in `research/antispoof-findings.md`;
+   torch belongs in a separate `requirements-bench.txt`, not the main install.
 2. Deploy for a URL — Lightsail for the engine, Amplify for `web/`, CloudFront for TLS.
 3. Wire Strands Agents SDK for the detection agent; it runs on local Ollama and
    `fetch_user()` already refuses when fewer than three families agree.
@@ -177,12 +276,16 @@ signal to update `stream.SCRIPTED_FAMILIES`.
 ## State at handover
 
 251 tests, all offline — no credentials, no network, no table required.
+250 pass and 1 skips: `ivr_only` never speaks, so it cannot demonstrate
+disclosure ordering, and it is skipped rather than counted as a pass.
 Committed and pushed to `main`. Two servers run locally: `server/app.py` on 8787
 and Next.js on 3000.
 
 What is real: the detector and its five families, the pure state machine, the
 air gap, the mandate freeze, cross-call memory in DynamoDB, Polly voices, the
-SSE stream, and the five-stage UI. What is not: `SYNTHESIS` and `IDENTITY` are
+SSE stream, and the five-stage UI. Note that only three of the five families can
+vote *for* a human, so the three-family gate is unanimity rather than a quorum,
+and the scripted `SYNTHESIS` is load-bearing in every fetch. What is not: `SYNTHESIS` and `IDENTITY` are
 scripted (marked amber in the UI and in `stream.SCRIPTED_FAMILIES`), the line is
 simulated, and nothing has been validated against a real support queue.
 

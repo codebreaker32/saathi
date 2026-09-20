@@ -14,9 +14,12 @@ pretending an eleven-minute hold took eleven minutes.
 from __future__ import annotations
 
 import json
+import os
 import sys
+import dataclasses
 import threading
 import time
+import wave
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
@@ -28,10 +31,74 @@ from saathi.frames import audio_id, build
 from saathi.simulate import SCENARIO_DIR, load, run
 
 AUDIO_DIR = Path(__file__).resolve().parent.parent / ".voice-cache" / "wav"
+SITE_DIR = Path(__file__).resolve().parent.parent / "web" / "out"
 CONTROLS: list[dict] = []
 SESSIONS: dict[str, dict] = {}
 _render_lock = threading.Lock()
 _seq = [0]
+
+
+def _mandate_from(d) -> "Mandate":
+    """Rebuild a Mandate from a request body, through a field whitelist.
+
+    The whitelist stops a client inventing attributes; it does NOT stop the
+    client choosing generous values, because on this single-user local build
+    the client IS the user and the mandate is their own grant to make. On a
+    shared deployment that stops being true and this needs a server-side token
+    issued by /api/mandate -- see AGENTS.md.
+    """
+    from saathi.types import Mandate
+    if not isinstance(d, dict):
+        return Mandate.empty()
+    allowed = {f.name for f in dataclasses.fields(Mandate)}
+    try:
+        return Mandate(**{k: v for k, v in d.items() if k in allowed})
+    except TypeError:
+        return Mandate.empty()
+
+
+def _speech_ms(frames: list[dict]) -> int | None:
+    """How much of the call was actually speech, from the rendered clips.
+
+    Returns None when no audio exists, so the summary says nothing about hold
+    rather than counting speech as waiting.
+    """
+    total, seen = 0.0, 0
+    for f in frames:
+        aid = f.get("audio")
+        if not aid:
+            continue
+        p = AUDIO_DIR / f"{aid}.wav"
+        if not p.exists():
+            continue
+        try:
+            with wave.open(str(p)) as w:
+                total += w.getnframes() / w.getframerate()
+                seen += 1
+        except Exception:
+            continue
+    return int(total * 1000) if seen else None
+
+
+# The live transport, created lazily and only if credentials exist. Absent
+# credentials this stays None and the webhook answers with empty TwiML, which
+# is what an unconfigured box should do: nothing, loudly enough to notice.
+_TRANSPORT = [None]
+
+
+def _twilio_webhook(path: str, form: dict) -> str:
+    from saathi.transport import twiml as T
+    from saathi.transport.twilio_transport import TwilioConfig, TwilioTransport
+    if _TRANSPORT[0] is None:
+        if not TwilioConfig.available():
+            print(f"  [twilio] {path} ignored: not configured", file=sys.stderr)
+            return T.document()
+        _TRANSPORT[0] = TwilioTransport(TwilioConfig.from_env())
+    try:
+        return _TRANSPORT[0].on_webhook(path, form)
+    except Exception as e:                      # never 500 at a carrier
+        print(f"  [twilio] {path}: {e}", file=sys.stderr)
+        return T.document()
 
 
 def prerender(frames: list[dict], profile: str | None = None) -> dict:
@@ -63,10 +130,20 @@ def _scenarios_for(line: str) -> list[dict]:
     picks up is the whole variable under test -- a warm undisclosed bot and a
     real rep answer the same number, and choosing between them is the demo.
     """
+    out = _by_line(line)
+    if out:
+        return out
+    # An unknown company has no scenarios of its own. Offering every
+    # counterparty we can simulate is more useful than an empty list, and the
+    # UI says which line each one belongs to.
+    return _by_line(None)
+
+
+def _by_line(line: str | None) -> list[dict]:
     out = []
     for p in sorted(SCENARIO_DIR.glob("*.yaml")):
         sc = load(p.stem)
-        if sc.get("line") != line:
+        if line is not None and sc.get("line") != line:
             continue
         out.append({"id": p.stem,
                     "truth": sc.get("ground_truth", {}).get("truth"),
@@ -106,6 +183,67 @@ class Handler(BaseHTTPRequestHandler):
                 })
             return self._json(items)
 
+        # The built UI, served from the SAME ORIGIN as the API. That is the
+        # whole point: an HTTPS page cannot call an HTTP API, and a Cloudflare
+        # quick tunnel buffers SSE no matter what headers you send (measured:
+        # every frame arriving in one instant at 17.5s, so the call view sat on
+        # "Dialling" and then jumped to the summary). One origin over plain
+        # HTTP has neither problem, and the stream arrives frame by frame.
+        if SITE_DIR.is_dir():
+            rel = u.path.lstrip("/") or "index.html"
+            if not u.path.startswith(("/api/", "/twilio/")):
+                cand = (SITE_DIR / rel).resolve()
+                if not str(cand).startswith(str(SITE_DIR.resolve())):
+                    return self.send_error(403)      # no path traversal
+                if cand.is_dir():
+                    cand = cand / "index.html"
+                if not cand.exists() and not cand.suffix:
+                    cand = cand.with_suffix(".html")
+                if cand.exists() and cand.is_file():
+                    return self._static(cand)
+
+        if u.path in ("/", "/health"):
+            # A root page, because the bare 404 that used to live here looked
+            # exactly like a broken deployment. It is not an API; it exists so a
+            # human who opens the engine URL can see what is running.
+            from saathi.transport.twilio_transport import TwilioConfig
+            live = TwilioConfig.available()
+            body = (
+                "<!doctype html><meta charset=utf-8><title>Saathi engine</title>"
+                "<style>body{font:14px system-ui;margin:40px;max-width:640px;"
+                "line-height:1.6}code{background:#f4f4f5;padding:2px 6px;"
+                "border-radius:4px}</style>"
+                "<h1>Saathi engine</h1><p>Running. This is the API, not the app.</p>"
+                f"<p>Live telephony: <strong>{'yes' if live else 'no'}</strong></p>"
+                "<p>Endpoints:</p><ul>"
+                "<li><code>/api/scenarios</code></li>"
+                "<li><code>/api/telephony</code></li>"
+                "<li><code>/api/events?session=...</code></li>"
+                "<li><code>/twilio/answer</code>, <code>/twilio/status</code> (POST)</li>"
+                "</ul>"
+            ).encode("utf-8")
+            self.send_response(200)
+            self._cors()
+            self.send_header("Content-Type", "text/html; charset=utf-8")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+            return
+
+        if u.path == "/api/telephony":
+            # The UI must be able to say truthfully whether a number will be
+            # dialled or simulated. Guessing here is how a demo ends up implying
+            # it placed a call it never placed.
+            from saathi.transport.twilio_transport import TwilioConfig
+            live = TwilioConfig.available()
+            return self._json({
+                "live": live,
+                "from_number": (TwilioConfig.from_env().from_number if live else None),
+                "why": ("ready to dial" if live else
+                        "no Twilio credentials, so a number here is recorded but "
+                        "the call runs against the simulated line"),
+            })
+
         if u.path.startswith("/api/audio/"):
             return self._wav(AUDIO_DIR / Path(u.path).name)
 
@@ -121,6 +259,49 @@ class Handler(BaseHTTPRequestHandler):
     def do_POST(self):
         u = urlparse(self.path)
 
+        # Twilio posts here at every decision point on a live call. Kept on the
+        # stdlib server rather than pulling in a framework: the whole surface is
+        # form-encoded in and TwiML out.
+        #
+        # NOTE: Twilio cannot reach localhost. SAATHI_PUBLIC_URL has to be a
+        # tunnel (ngrok, Cloudflare) or a deployed box, or none of this fires.
+        if u.path.startswith("/twilio/"):
+            n = int(self.headers.get("Content-Length", 0))
+            raw = self.rfile.read(n).decode("utf-8", "replace") if n else ""
+            form = {k: v[0] for k, v in parse_qs(raw).items()}
+            body = _twilio_webhook(u.path, form).encode("utf-8")
+            self.send_response(200)
+            self.send_header("Content-Type", "text/xml; charset=utf-8")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+            return
+
+        if u.path == "/api/testcall":
+            # The smallest honest thing a number field can do today: place a
+            # real call, announce what Saathi is, and hang up. It does NOT run
+            # the detector -- driving a live call through run() is the Phase 0
+            # transport refactor and is not done. Saying "test call" rather than
+            # "call" is the difference between a demo and a lie.
+            n = int(self.headers.get("Content-Length", 0))
+            body = json.loads(self.rfile.read(n) or b"{}")
+            to = (body.get("to_number") or "").strip()
+            from saathi.transport.twilio_transport import (
+                TwilioConfig, TwilioNotConfigured, TwilioTransport)
+            if not to:
+                return self._json({"placed": False, "why": "no number given"})
+            try:
+                cfg = TwilioConfig.from_env()
+            except TwilioNotConfigured as e:
+                return self._json({"placed": False, "why": str(e)})
+            try:
+                t = TwilioTransport(cfg)
+                sid = t.dial(to, session_id="testcall")
+                return self._json({"placed": True, "sid": sid,
+                                   "why": f"dialling {to} from {cfg.from_number}"})
+            except Exception as e:
+                return self._json({"placed": False, "why": f"{type(e).__name__}: {e}"})
+
         if u.path == "/api/call":
             n = int(self.headers.get("Content-Length", 0))
             body = json.loads(self.rfile.read(n) or b"{}")
@@ -133,6 +314,7 @@ class Handler(BaseHTTPRequestHandler):
                 "facts": body.get("facts") or {},
                 "playbook": body.get("playbook"),
                 "mandate": body.get("mandate") or {},
+                "to_number": (body.get("to_number") or "").strip(),
             }
             return self._json({"session": sid})
 
@@ -206,6 +388,37 @@ class Handler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(raw)
 
+    _MIME = {".html": "text/html; charset=utf-8", ".js": "text/javascript",
+             ".css": "text/css", ".svg": "image/svg+xml", ".ico": "image/x-icon",
+             ".json": "application/json", ".txt": "text/plain; charset=utf-8",
+             ".woff2": "font/woff2", ".png": "image/png"}
+
+    def _static(self, path: Path):
+        raw = path.read_bytes()
+        self.send_response(200)
+        self._cors()
+        self.send_header("Content-Type",
+                         self._MIME.get(path.suffix, "application/octet-stream"))
+        self.send_header("Content-Length", str(len(raw)))
+        # Hashed asset names, so they can be cached hard; the HTML cannot.
+        self.send_header("Cache-Control",
+                         "public, max-age=31536000" if "/_next/" in path.as_posix()
+                         else "no-cache")
+        self.end_headers()
+        self.wfile.write(raw)
+
+    def _chunk(self, payload: bytes) -> None:
+        """One HTTP chunk, flushed immediately.
+
+        An empty payload writes the terminating zero-length chunk that ends a
+        chunked body.
+        """
+        self.wfile.write(f"{len(payload):X}\r\n".encode("ascii"))
+        if payload:
+            self.wfile.write(payload)
+        self.wfile.write(b"\r\n")
+        self.wfile.flush()
+
     def _wav(self, path: Path):
         if not path.exists() or path.suffix != ".wav":
             return self.send_error(404)
@@ -246,19 +459,36 @@ class Handler(BaseHTTPRequestHandler):
         except Exception:
             store = None
 
-        out = run(sc, sc.get("goal", ""), brief=brief, store=store)
+        out = run(sc, sc.get("goal", ""), brief=brief, store=store,
+                  mandate=_mandate_from(sess.get("mandate")))
         frames = build(out, sc, speed=speed)
         stats = prerender(frames)
+        # Rebuilt once the clips exist, so the summary can report hold time from
+        # measured audio instead of guessing. build() is pure and cheap; run()
+        # is not re-run, so the timeline is identical.
+        frames = build(out, sc, speed=speed, speech_ms=_speech_ms(frames))
         print(f"  [voice] {name}: {stats}", file=sys.stderr)
 
         self.send_response(200)
         self._cors()
         self.send_header("Content-Type", "text/event-stream")
-        self.send_header("Cache-Control", "no-cache")
+        # no-transform tells intermediaries not to compress. A proxy that
+        # compresses has to buffer to do it, and buffering an SSE stream
+        # defeats the entire point of one.
+        self.send_header("Cache-Control", "no-cache, no-transform")
+        self.send_header("Content-Encoding", "identity")
+        # CHUNKED, and this is load-bearing rather than tidy. Without it the
+        # body is delimited only by the connection closing, so every
+        # intermediary has to buffer the WHOLE stream to learn its length.
+        # Measured through a Cloudflare tunnel: first frame arrived at 20.5s
+        # and all twelve landed in the same instant, so the call view sat on
+        # "Dialling 00:00" for the entire call and then jumped straight to the
+        # summary. Locally, where nothing proxies, the first frame took 0.05s
+        # -- which is exactly why this was invisible in development.
+        self.send_header("Transfer-Encoding", "chunked")
         # close, not keep-alive: the stream is finite and a client that cannot
         # tell "finished" from "quiet" will sit there forever
-        self.send_header("Connection", "close")
-        self.close_connection = True
+        self.send_header("Connection", "keep-alive")
         self.send_header("X-Accel-Buffering", "no")
         self.end_headers()
 
@@ -270,18 +500,23 @@ class Handler(BaseHTTPRequestHandler):
                 if delay > 0:
                     time.sleep(min(delay, 20.0))
                 payload = json.dumps(f).encode()
-                self.wfile.write(b"data: " + payload + b"\n\n")
-                self.wfile.flush()
-            self.wfile.write(b"event: done\ndata: {}\n\n")
-            self.wfile.flush()
+                self._chunk(b"data: " + payload + b"\n\n")
+            self._chunk(b"event: done\ndata: {}\n\n")
+            self._chunk(b"")          # terminating zero-length chunk
         except (BrokenPipeError, ConnectionResetError):
             pass                                     # viewer closed the tab
 
 
 def main():
     port = int(sys.argv[1]) if len(sys.argv) > 1 else 8787
-    srv = ThreadingHTTPServer(("127.0.0.1", port), Handler)
-    print(f"saathi stream on http://127.0.0.1:{port}")
+    # Loopback by DEFAULT, because a dev box should not publish itself to the
+    # network by accident. On a deployed host nothing outside the machine can
+    # reach a loopback socket, so SAATHI_BIND=0.0.0.0 is required there -- the
+    # service comes up, the port refuses every external connection, and it
+    # looks exactly like a crashed process.
+    host = os.environ.get("SAATHI_BIND", "127.0.0.1").strip() or "127.0.0.1"
+    srv = ThreadingHTTPServer((host, port), Handler)
+    print(f"saathi stream on http://{host}:{port}")
     print(f"  scenarios  http://127.0.0.1:{port}/api/scenarios")
     print(f"  stream     http://127.0.0.1:{port}/api/events?scenario=real_rep&speed=40")
     try:

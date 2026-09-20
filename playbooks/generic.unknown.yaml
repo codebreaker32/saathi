@@ -1,0 +1,30 @@
+# The fallback, for a company with no playbook of its own.
+#
+# Without this, naming any company outside the four hand-written playbooks made
+# understand() return matched:false and step 2 of the UI had nothing to render.
+# A support-call assistant that only works for four companies is a demo, not a
+# product, and the failure mode was silent.
+#
+# It is deliberately CONSERVATIVE rather than clever. It knows nothing about the
+# company's IVR, so it claims nothing: no ivr_path, no expected_asks, no
+# offer_options. What it does carry is the part that must never be missing --
+# the NEVER-tagged fields, so the air gap holds for an unknown company exactly
+# as it does for Zomato.
+id: generic.unknown
+company: the company
+line: sim://generic
+problem: "Stated by the user"
+goal: "State the problem and get it resolved or referenced"
+lookup_key: registered_phone
+facts_required:
+  - {field: registered_phone, tag: SAFE_TO_STATE, from: login}
+  - {field: order_id, tag: SAFE_TO_STATE}
+  - {field: amount, tag: SAFE_TO_STATE}
+  # Never fetched, never briefed, never reachable -- the whole point of the
+  # air gap is that it does not depend on knowing the company.
+  - {field: card_last4, tag: NEVER, from: never}
+  - {field: registered_otp, tag: NEVER, from: never}
+ivr_path: []
+expected_asks: []
+offer_options: []
+success: [reference_number, resolution_stated]
