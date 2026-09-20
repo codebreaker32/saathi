@@ -151,6 +151,26 @@ _VAGUE = re.compile(
 )
 
 
+def _grounded_in(text: str, paise: int | None) -> bool:
+    """Does this figure actually appear in what the user wrote?
+
+    The parser must not trust the model to signal "no amount stated" by
+    returning null. A small local model asked for an integer will happily
+    invent one -- measured: "accept a refund" came back as 100 paise, which
+    renders as "a refund of Rs 1 or more" and is therefore authority to accept
+    almost anything. The read-back would have shown it, but a grant that only
+    a careful reader catches is a grant waiting to be waved through.
+
+    So the extraction is checked against the source. A number that is not in
+    the sentence cannot end up in the mandate, whatever the model returns.
+    """
+    if paise is None:
+        return True
+    written = {n.replace(",", "") for n in re.findall(r"\d[\d,]*", text)}
+    rupees = paise // 100
+    return bool(written & {str(rupees), str(paise), f"{rupees}"})
+
+
 def parse(text: str, llm: LLMClient) -> ParseResult:
     """Free text -> fields. Ambiguity resolves toward LESS authority, always.
 
@@ -190,6 +210,12 @@ def parse(text: str, llm: LLMClient) -> ParseResult:
             error="that grants open-ended discretion. Say what it may accept, "
                   "and up to how much."
         )
+
+    # Drop any figure the user did not actually write, so the checks below
+    # treat a hallucinated amount exactly like a missing one.
+    for key in ("refund", "credit"):
+        if not _grounded_in(text, d.get(key)):
+            d[key] = None
 
     needs: list[str] = []
     if d.get("refund_mentioned") and d.get("refund") is None:

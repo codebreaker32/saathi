@@ -78,10 +78,15 @@ previous call to that number.
 
 - **It announces itself first, every time.** A fixed clip, never model output,
   gated at the audio sink. The model is not asked whether to say it.
-- **It cannot authenticate as you.** Not "refuses to" — the card number is not
-  in the brief and not in the vault, so *"I don't have that"* is literally true.
-  `test_missed_trigger_still_leaks_nothing` deletes the entire trigger-phrase
-  list and asserts nothing leaks anyway.
+- **It cannot authenticate as you.** Not "refuses to" — the card number never
+  enters the brief, and the brief is the only channel by which any user fact
+  reaches something the agent says. So *"I don't have that"* is literally true.
+
+  `tests/test_air_gap.py` empties the trigger-phrase list entirely, lets the rep
+  ask for the card outright, and checks every word the agent spoke across a full
+  call. It is paired with a **mutation control** that deliberately bypasses the
+  whitelist and requires the same check to *fail* — because a leak test that
+  cannot detect a leak proves nothing, and would read as proof.
 - **It only accepts what you authorised.** You write the mandate as a sentence
   — *"accept a refund of 400 or more, or a redelivery if they can't"* — it is
   parsed once before the call, and the frozen fields are what enforce during it.

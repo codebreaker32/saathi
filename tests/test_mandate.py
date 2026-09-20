@@ -193,3 +193,44 @@ def test_readback_is_plain_and_says_what_comes_back_to_you():
 
 def test_readback_of_empty_says_it_will_only_ask_for_a_callback():
     assert "call you back" in render(Mandate.empty())
+
+
+# --------------------------------------------------------------------------- #
+# A model that invents a figure must not be believed.
+# Measured against a real local model: "accept a refund" came back with
+# refund=100, which renders as "a refund of Rs 1 or more" -- authority to
+# accept almost any offer, granted by a hallucination rather than by the user.
+# --------------------------------------------------------------------------- #
+
+
+def test_an_invented_amount_is_rejected_not_rendered():
+    r = parse("accept a refund", llm_emitting(refund_mentioned=True, refund=100))
+    assert not r.ok, "a figure the user never wrote must not become a permission"
+    assert r.needs and "least" in r.needs[0].lower()
+
+
+def test_an_amount_the_user_did_write_is_kept():
+    r = parse("accept a refund of 400 or more",
+              llm_emitting(refund_mentioned=True, refund=40_000))
+    assert r.ok and r.mandate.accept_refund_min_paise == 40_000
+
+
+def test_a_figure_from_elsewhere_in_the_sentence_still_counts():
+    """The user wrote 250, so 250 is theirs to grant even if phrased loosely."""
+    r = parse("they owe me 250, accept that or more",
+              llm_emitting(refund_mentioned=True, refund=25_000))
+    assert r.ok and r.mandate.accept_refund_min_paise == 25_000
+
+
+def test_a_plausible_but_unwritten_amount_is_still_rejected():
+    """500 is round and plausible. It is not in the sentence; 400 is.
+
+    Phrased with no vague wording, so this exercises the grounding check and
+    not the open-discretion guard -- otherwise it would pass for the wrong
+    reason and prove nothing about grounding.
+    """
+    text = "accept a refund for my 400 rupee order"
+    from saathi.mandate import _VAGUE
+    assert not _VAGUE.search(text), "must not trip the vague guard instead"
+    r = parse(text, llm_emitting(refund_mentioned=True, refund=50_000))
+    assert not r.ok and r.needs

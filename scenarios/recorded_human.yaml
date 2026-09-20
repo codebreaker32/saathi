@@ -27,6 +27,7 @@ nodes:
     persona:
       truth: bot
       synthesis_score: 0.09     # a real human voice: SYNTHESIS says "genuine"
+      voice_tag: "{rep}"        # and it must SOUND like one when voiced
       judge_binding: none
       duplex: steamroll
       turns:

@@ -1,0 +1,62 @@
+@import "tailwindcss";
+
+/* Palette lifted from Jitsi's token set -- near-black page, layered surfaces,
+   one bright success and one bright warning. It suits a call view because the
+   content is text and state, and everything that matters can be a colour
+   against near-black. */
+:root {
+  --surface-01: #040404;
+  --surface-02: #141414;
+  --surface-03: #292929;
+  --surface-05: #525252;
+  --surface-08: #a3a3a3;
+  --success:    #1ec26a;
+  --warning:    #ffd600;
+  --danger:     #e04a3f;
+  --accept:     #6a50d3;
+  --text-01:    #ffffff;
+  --text-02:    #a3a3a3;
+  --text-03:    #6b6b6b;
+  /* Jitsi's 4px spacing scale */
+  --s1: 4px; --s2: 8px; --s3: 16px; --s4: 24px; --s5: 32px;
+}
+
+html, body {
+  background: var(--surface-01);
+  color: var(--text-01);
+  font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  font-size: 0.875rem;
+  line-height: 1.25rem;
+  margin: 0;
+  -webkit-font-smoothing: antialiased;
+}
+
+.surface  { background: var(--surface-02); }
+.surface3 { background: var(--surface-03); }
+.mono     { font-variant-numeric: tabular-nums;
+            font-family: ui-monospace, "SF Mono", Menlo, monospace; }
+
+/* Jitsi's toolbar button: circular, flat, colour carries the meaning */
+.tbtn {
+  width: 48px; height: 48px; border-radius: 9999px;
+  display: grid; place-items: center;
+  background: var(--surface-03); color: var(--text-01);
+  border: none; cursor: pointer; transition: background .12s, transform .08s;
+}
+.tbtn:hover:not(:disabled) { background: var(--surface-05); }
+.tbtn:active:not(:disabled) { transform: scale(.94); }
+.tbtn:disabled { opacity: .3; cursor: not-allowed; }
+.tbtn.danger { background: var(--danger); }
+.tbtn.on     { background: var(--accept); }
+
+@keyframes pulse { 0%,100% { opacity: 1 } 50% { opacity: .35 } }
+.pulse { animation: pulse 1.4s ease-in-out infinite; }
+
+@keyframes slidein { from { opacity: 0; transform: translateY(6px) } to { opacity: 1; transform: none } }
+.slidein { animation: slidein .18s ease-out; }
+
+.bar { height: 4px; border-radius: 2px; background: var(--surface-03); overflow: hidden; }
+.bar > i { display: block; height: 100%; border-radius: 2px; transition: width .35s ease; }
+
+::-webkit-scrollbar { width: 8px }
+::-webkit-scrollbar-thumb { background: var(--surface-03); border-radius: 4px }

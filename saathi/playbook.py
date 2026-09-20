@@ -53,12 +53,22 @@ def _from_dict(raw: dict) -> Playbook:
 
 # The free-text box is the leak channel, because someone will eventually type
 # their DOB into it. Redact on construction and tell the user what was removed.
+#
+# Matching runs on a CLUSTER, not on raw adjacency. The first version of this
+# used \b\d{12,19}\b, which catches a card number written the one way the tests
+# happened to write it and misses 4111-1111-1111-1111 entirely -- i.e. the way
+# people actually write them. A separator-tolerant scan is the difference
+# between a scrubber and a scrubber-shaped object.
+_CLUSTER = re.compile(r"\d(?:[\s.\-_/]?\d)*")
+LONG_NUMBER_MIN_DIGITS = 12   # cards, Aadhaar, account numbers
+LONG_NUMBER_MAX_DIGITS = 19
+
 _PII_PATTERNS = [
-    (re.compile(r"\b\d{2}[/-]\d{2}[/-]\d{2,4}\b"), "[date removed]"),
-    (re.compile(r"\b\d{12,19}\b"), "[long number removed]"),
+    # dates, any common separator
+    (re.compile(r"\b\d{1,2}[\s./-]\d{1,2}[\s./-]\d{2,4}\b"), "[date removed]"),
     (re.compile(r"\b[A-Z]{5}\d{4}[A-Z]\b"), "[PAN removed]"),
-    (re.compile(r"\b(cvv|otp|pin|password)\b[:\s]*\S+", re.I), "[credential removed]"),
-    (re.compile(r"\b\d{4}\s?\d{4}\s?\d{4}\b"), "[Aadhaar removed]"),
+    (re.compile(r"\b(cvv|otp|pin|password|passcode)\b[:\s]*\S+", re.I),
+     "[credential removed]"),
 ]
 
 
@@ -84,12 +94,29 @@ class CallBrief:
 
 
 def scrub(text: str) -> tuple[str, list[str]]:
+    """Returns the cleaned text and a list of what was taken out.
+
+    The list is not cosmetic: an empty list tells the user nothing was removed,
+    so a scrubber that silently misses is worse than one that is absent.
+    """
     removed: list[str] = []
     for pattern, label in _PII_PATTERNS:
         if pattern.search(text):
             removed.append(label)
             text = pattern.sub(label, text)
-    return text, removed
+
+    # Long numeric runs, tolerant of the separators people actually type.
+    out, last = [], 0
+    for m in _CLUSTER.finditer(text):
+        digits = sum(c.isdigit() for c in m.group())
+        if LONG_NUMBER_MIN_DIGITS <= digits <= LONG_NUMBER_MAX_DIGITS:
+            out.append(text[last:m.start()])
+            out.append("[long number removed]")
+            last = m.end()
+            if "[long number removed]" not in removed:
+                removed.append("[long number removed]")
+    out.append(text[last:])
+    return "".join(out), removed
 
 
 def build_brief(pb: Playbook, problem_text: str, facts: dict[str, str]) -> CallBrief:

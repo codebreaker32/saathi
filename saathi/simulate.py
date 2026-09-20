@@ -45,6 +45,16 @@ class Beat:
     actor: str
     text: str
     note: str = ""
+    gap_ms: int = 0
+    """How long this party waited before speaking.
+
+    Carried explicitly rather than derived from timestamps, because the
+    scenario's speak_ms figures are estimates and real speech runs longer --
+    so a derived gap drowns the very difference that matters. The bot answers
+    in 400ms and the rep takes 1400ms, and that contrast is evidence the
+    detector scores. If the rendered audio cannot reproduce it, the recording
+    contradicts the thing it exists to demonstrate.
+    """
 
 
 @dataclass
@@ -78,7 +88,14 @@ def load(name: str, directory: Path | None = None) -> dict:
     return yaml.safe_load((d / f"{name}.yaml").read_text())
 
 
-def run(scenario: dict, goal: str, *, max_hold_ms: int = 1_800_000) -> Outcome:
+def run(scenario: dict, goal: str, *, brief=None, verifier=None,
+        max_hold_ms: int = 1_800_000) -> Outcome:
+    """`brief` is the ONLY channel by which user facts reach anything the agent
+    says. Nothing else is consulted, which is what makes the whitelist in
+    build_brief load-bearing rather than decorative.
+
+    `verifier` is injectable so a test can empty the trigger-phrase list and
+    show that a miss still leaks nothing."""
     clock = VirtualClock()
     state = SessionState()
     out = Outcome()
@@ -89,12 +106,24 @@ def run(scenario: dict, goal: str, *, max_hold_ms: int = 1_800_000) -> Outcome:
     # available: an IVR prompt is identical on every call, a person is not.
     for prompt in scenario.get("known_prompts", []):
         rep.remember(prompt)
-    verifier = VerificationDetector()
+    verifier = verifier if verifier is not None else VerificationDetector()
     spoken_by_us: list[str] = []
-    # Everything we say out loud. Used so a rep repeating our own order number
-    # back to us is not mistaken for a request to authenticate.
-    ours_spoken: set[str] = set(
-        re.findall(r"\d{4,8}", _render(clips.DISCLOSURE, scenario)))
+    # Digits a rep may read back to us without it counting as a request to
+    # authenticate. Derived ONLY from whitelisted fact values -- never from the
+    # free-text problem box.
+    #
+    # Deriving it from the rendered utterance instead compounds a scrubber miss
+    # into a second failure: a credential that leaked into what we said would be
+    # added to this set, which then DISARMS the digit backstop for exactly those
+    # digits, so the rep reading it back would pass unnoticed too.
+    if brief is not None:
+        ours_spoken: set[str] = {
+            d for v in brief.facts.values()
+            for d in re.findall(r"\d{4,8}", str(v))
+        }
+    else:
+        ours_spoken = set(
+            re.findall(r"\d{4,8}", _render(clips.DISCLOSURE, scenario, brief)))
     seen_prompts: dict[str, int] = {}
 
     def emit(event):
@@ -104,7 +133,7 @@ def run(scenario: dict, goal: str, *, max_hold_ms: int = 1_800_000) -> Outcome:
             if isinstance(c, Speak):
                 spoken_by_us.append(c.purpose)
                 out.beats.append(Beat(clock.now_ms(), "saathi",
-                                      _render(c.text, scenario),
+                                      _render(c.text, scenario, brief),
                                       f"[{c.purpose}]"))
             elif isinstance(c, SummonUser):
                 out.beats.append(Beat(clock.now_ms(), "system",
@@ -183,7 +212,7 @@ def run(scenario: dict, goal: str, *, max_hold_ms: int = 1_800_000) -> Outcome:
             # just arrived -- the failure the old design actually had.
             acc = EpochAccumulator(phase=LineState.ASSESSING)
             _party(node["persona"], scenario, clock, acc, rep, verifier,
-                   emit, out, spoken_by_us, ours_spoken)
+                   emit, out, spoken_by_us, ours_spoken, brief)
             node_id = None
         else:
             node_id = None
@@ -194,20 +223,30 @@ def run(scenario: dict, goal: str, *, max_hold_ms: int = 1_800_000) -> Outcome:
     return out
 
 
-def _render(text: str, scenario: dict) -> str:
-    return (text
-            .replace("{registered_phone}", scenario.get("registered_phone", "98xxx 41182"))
-            .replace("{problem_line}", scenario.get("problem_line",
-                     "Their order 4471 from Thursday arrived two hours late.")))
+def _render(text: str, scenario: dict, brief=None) -> str:
+    """Substitutes ONLY from the brief, which carries SAFE_TO_STATE fields and
+    nothing else. A NEVER field cannot appear in an utterance because it never
+    entered the brief -- there is no branch here that consults a wider source."""
+    if brief is not None:
+        phone = brief.facts.get("registered_phone", "the registered number")
+        problem = brief.problem_text
+        order = brief.facts.get("order_id")
+        if order:
+            problem = f"Order {order}: {problem}"
+    else:
+        phone = scenario.get("registered_phone", "98xxx 41182")
+        problem = scenario.get(
+            "problem_line", "Their order 4471 from Thursday arrived two hours late.")
+    return text.replace("{registered_phone}", phone).replace("{problem_line}", problem)
 
 
 def _party(persona, scenario, clock, acc, rep, verifier, emit, out, spoken_by_us,
-           ours_spoken):
+           ours_spoken, brief=None):
     """A candidate party speaks. Disclosure fires here, before any verdict."""
     acc.phase = LineState.ASSESSING
     truth = persona.get("truth", "bot")
-    planted = contingency.plant(_render(clips.DISCLOSURE, scenario))
-    last_ours = _render(clips.DISCLOSURE, scenario)
+    planted = contingency.plant(_render(clips.DISCLOSURE, scenario, brief))
+    last_ours = _render(clips.DISCLOSURE, scenario, brief)
     # The model's ANSWER is scripted; the judge code path is real. Marked so
     # nothing here can be read as a measurement.
     judge_llm = StubLLM([json.dumps({"binding": persona.get("judge_binding",
@@ -223,7 +262,9 @@ def _party(persona, scenario, clock, acc, rep, verifier, emit, out, spoken_by_us
     def hear(text: str, speak_ms: int, tag: str, *, after_probe: bool = False) -> bool:
         """Process one remote utterance. Returns False if the call is over."""
         nonlocal last_ours
-        out.beats.append(Beat(clock.now_ms(), "them", text, tag))
+        out.beats.append(Beat(clock.now_ms(), "them", text,
+                              tag + persona.get("voice_tag", ""),
+                              gap_ms=persona.get("gap_ms", 900)))
 
         # Order matters. The utterance is processed FIRST, because that is what
         # fires the disclosure -- and a rep whose very first sentence asks for

@@ -63,12 +63,42 @@ def main(argv=None) -> int:
     t = sub.add_parser("table", help="run every scenario and print the scoreboard")
     t.add_argument("--goal", default=None)
 
+    v = sub.add_parser("voice", help="render a call to a .wav you can listen to")
+    v.add_argument("--scenario", required=True)
+    v.add_argument("--out", default=None)
+    v.add_argument("--profile", default="saathi")
+
     sub.add_parser("playbooks", help="list playbooks and what they will be asked for")
 
     args = ap.parse_args(argv)
 
     if args.cmd == "run":
         return show(args.scenario, args.goal)
+    if args.cmd == "voice":
+        from pathlib import Path as _P
+        from saathi import voice as V
+        if not V.available(args.profile):
+            print(f"AWS profile '{args.profile}' is not reachable; run: aws login")
+            return 2
+        sc = load(args.scenario)
+        out = run(sc, sc.get("goal", ""))
+        print(f"\n  synthesising {args.scenario} ...", flush=True)
+        chunks, meta = V.render_call(out, profile=args.profile)
+        dest = _P(args.out or f"{args.scenario}.wav")
+        V.write_wav(dest, chunks)
+        print(f"  wrote {dest}  ({meta['seconds']}s of audio)")
+        print(f"  call clock     {meta['call_clock_s']}s of simulated call")
+        if meta["real_wait_s"]:
+            ratio = meta["real_wait_s"] / max(meta["rendered_wait_s"], 0.1)
+            print(f"  waiting        {meta['real_wait_s']}s endured, "
+                  f"{meta['rendered_wait_s']}s played  ({ratio:.0f}x compressed)")
+        drift = meta["accounted_s"] - meta["call_clock_s"]
+        if abs(drift) > 2:
+            print(f"  speech drift   real speech runs {drift:+.1f}s vs the scenario's"
+                  f" estimate  (Polly is ground truth, the yaml is a guess)")
+        print("  every spoken word plays at full length; only waiting is compressed.\n")
+        return 0
+
     if args.cmd == "table":
         named = []
         for path in sorted(SCENARIO_DIR.glob("*.yaml")):

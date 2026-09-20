@@ -2,3 +2,9 @@
 __pycache__/
 *.pyc
 .pytest_cache/
+.voice-cache/
+*.wav
+.env.bedrock
+web/node_modules/
+web/.next/
+web/out/

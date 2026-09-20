@@ -3,6 +3,9 @@
 import pytest
 
 from saathi.playbook import BriefError, build_brief, load_all, scrub
+
+# The end-to-end version of this file's claim lives in test_air_gap.py:
+# proving a credential cannot be UTTERED needs a whole call, not a brief.
 from saathi.types import Tag
 
 PLAYBOOKS = load_all()
@@ -39,25 +42,15 @@ def test_lookup_key_is_stateable(pb):
     assert pb.lookup_key in safe
 
 
-def test_missed_trigger_still_leaks_nothing():
-    """The phrase list is the courtesy layer; the air gap is the guarantee.
-
-    Even with every trigger phrase removed, there is no card number in the
-    brief for the agent to produce -- because it was never loaded.
-    """
-    pb = PLAYBOOKS["zomato.delivery_delay"]
-    brief = build_brief(pb, "order late", {"order_id": "4471", "amount": "499"})
-    for secret in ("4111111111111111", "1234", "14/03/1999"):
-        assert not brief.contains(secret)
-    assert "card_last4" not in brief.facts
-
-
 @pytest.mark.parametrize("text,marker", [
     ("my dob is 14/03/1999", "[date removed]"),
     ("card 4111111111111111 was charged", "[long number removed]"),
     ("pan ABCDE1234F", "[PAN removed]"),
     ("the otp was 448213", "[credential removed]"),
-    ("aadhaar 1234 5678 9012", "[Aadhaar removed]"),
+    # Caught by the generic long-number scan now. Specific labels were dropped
+    # on purpose: each type-specific pattern carried its own separator blind
+    # spot, and a correct generic label beats a confident wrong one.
+    ("aadhaar 1234 5678 9012", "[long number removed]"),
 ])
 def test_free_text_box_is_scrubbed(text, marker):
     """Someone will eventually type their DOB into the problem box."""
