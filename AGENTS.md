@@ -10,6 +10,18 @@ Missing a human just wastes a call. That asymmetry is the reason for most of the
 design decisions below, and if you change something, check you have not
 flattened it.
 
+## Set up from a fresh clone
+
+```bash
+python3 -m venv .venv && .venv/bin/pip install -r requirements.txt
+cd web && npm install && cd ..
+```
+
+That is enough to run everything, including the audio — **no AWS account is
+needed**. Polly output is content-hashed into `.voice-cache/`, which is
+gitignored, so on a fresh clone the first call renders silently without voices
+unless you either copy that directory across or configure AWS (below).
+
 ## Run it
 
 ```bash
@@ -21,8 +33,11 @@ cd web && npm run dev                               # http://localhost:3000
 .venv/bin/python -m saathi.cli voice --scenario real_rep --out call.wav
 ```
 
-The whole demo runs with **no AWS credentials** — Polly output is content-hashed
-into `.voice-cache/`, so all 8 scenarios are already voiced.
+`.voice-cache/` is gitignored because it is 8MB of generated audio. To voice the
+scenarios on a new machine, either copy that folder from someone who has it, or
+set up AWS (below) and run `saathi.cli voice --scenario <name>` once per
+scenario — it is cached forever after, keyed on voice and text, so it does not
+re-render when the account changes.
 
 ## House rules
 
@@ -110,24 +125,57 @@ detector verdict deliberately has no model in it, and `saathi/llm.py` speaks to
 any OpenAI-compatible endpoint (`ollama` locally, plus groq/xai/openrouter/
 gemini/deepseek/together by name).
 
-## In flight
+## The anti-spoofing question — settled, see `research/antispoof-findings.md`
 
-A workflow is measuring whether `SYNTHESIS` can become a real anti-spoofing
-model. **Current answer: no, not on this corpus.** Real AASIST ranks the demo's
-human rep as *more* synthetic than the bot (AUC 0.317) because both voices are
-Polly, and two-thirds of the apparent skill in a naive setup is channel
-provenance rather than voice (0.938 studio vs 0.69 channel-matched).
+`SYNTHESIS` and `IDENTITY` render amber because they are **scripted stand-ins**,
+not measured models. We investigated whether a real anti-spoofing model could
+replace them. **It cannot, on this corpus, and the amber marker must stay.**
 
-So: keep the amber marker, and ship the model as a **bench with an honest table**
-rather than as a family. See the workflow transcript under
-`.claude/projects/*/subagents/workflows/wf_93f3f1a4-119/`.
+Three things were measured, with real corpora and real AASIST weights:
+
+- Pointed at today's all-Polly corpus, the model ranks the demo's **human rep as
+  more synthetic than the bot** — AUC 0.317, i.e. backwards. Both voices are
+  Polly, so it is doing its job correctly. Wiring it today would vote against
+  the human.
+- **Two thirds of the apparent skill is channel, not voice.** Studio human vs
+  Polly scores AUC 0.938; both sides through one telephone chain scores 0.69.
+- 96 utterances from 8 speakers is not 96 samples. ICC is 0.54-0.79, so
+  intervals must be **speaker-clustered**, not utterance-bootstrapped.
+
+The recommendation, which we agree with: ship the model as an **offline bench
+with an honest table** — *"AUC 0.69 [0.55, 0.83], speaker-clustered, 8 speakers,
+2 generators"* — rather than as a green bar. That is the number a sceptical
+reader would have asked for, and a better artefact than a bar.
+
+`tests/test_scenarios.py::test_synthesis_is_currently_load_bearing_for_nothing`
+is written to **start failing** when a real model is wired. That failure is the
+signal to update `stream.SCRIPTED_FAMILIES`.
 
 ## Next, roughly in order
 
-1. Publish the anti-spoofing bench table in `README.md` (do **not** turn the bar green).
+1. Publish the anti-spoofing bench table in `README.md` (do **not** turn the bar
+   green). The corpus recipe and the stdlib channel chain are described in
+   `research/antispoof-findings.md`; torch belongs in a separate
+   `requirements-bench.txt`, not the main install.
 2. Deploy for a URL — Lightsail for the engine, Amplify for `web/`, CloudFront for TLS.
 3. Wire Strands Agents SDK for the detection agent; it runs on local Ollama and
    `fetch_user()` already refuses when fewer than three families agree.
 4. Real telephony is a `CallTransport` implementation away. Note: **Twilio Media
    Streams cannot send DTMF toward the call**, which rules out the obvious design;
    LiveKit's SIP participant handles it. Indian numbers need a licensed operator.
+
+
+## State at handover
+
+251 tests, all offline — no credentials, no network, no table required.
+Committed and pushed to `main`. Two servers run locally: `server/app.py` on 8787
+and Next.js on 3000.
+
+What is real: the detector and its five families, the pure state machine, the
+air gap, the mandate freeze, cross-call memory in DynamoDB, Polly voices, the
+SSE stream, and the five-stage UI. What is not: `SYNTHESIS` and `IDENTITY` are
+scripted (marked amber in the UI and in `stream.SCRIPTED_FAMILIES`), the line is
+simulated, and nothing has been validated against a real support queue.
+
+The honest README claim today is the one already there: zero false fetches in
+four machine calls, quoted as a **52.7% upper bound** rather than 0%.
