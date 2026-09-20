@@ -1,0 +1,14 @@
+# Indian support lines code-switch mid-sentence, so an English list alone is
+# not enough. Romanised Hindi is what actually appears in ASR output.
+locale: hi
+patterns:
+  - "janm ?tithi"
+  - "janam din"
+  - "aakhri char"
+  - "kaarad number"
+  - "\\bo\\.?t\\.?p\\b"
+  - "code bat(a|aa)"
+  - "sa?uraksha"
+  - "pehchaan"
+  - "verify kar"
+  - "confirm kar"

@@ -1,0 +1,22 @@
+# Nobody ever answers. The correct behaviour is to keep waiting quietly and
+# never fetch -- not to get bored and decide the hold music is a person.
+id: ivr_only
+org: Airtel Broadband
+line: "sim://airtel"
+goal: "billing duplicate charge reversal"
+ring_ms: 5200
+start: root
+nodes:
+  root:
+    kind: menu
+    prompt: "For billing press 1, for technical support press 2, to repeat press 9."
+    options: {"1": queue, "2": queue, "9": root}
+  queue:
+    kind: hold
+    wait_ms: 1500000
+    announcements:
+      - {at_ms: 120000,  text: "All of our advisors are currently busy. Please continue to hold."}
+      - {at_ms: 600000,  text: "All of our advisors are currently busy. Please continue to hold."}
+      - {at_ms: 1200000, text: "All of our advisors are currently busy. Please continue to hold."}
+    then: null
+ground_truth: {truth: bot, human_first_word_ms: null}

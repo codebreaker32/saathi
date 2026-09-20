@@ -1,0 +1,28 @@
+# The normal ending in India, not the unusual one: an OTP is requested on
+# most calls that touch the account. The handoff must fire on the first
+# sentence, before anything else happens.
+id: verify_immediately
+org: Airtel Broadband
+line: "sim://airtel"
+goal: "billing duplicate charge reversal"
+ring_ms: 5000
+start: root
+nodes:
+  root:
+    kind: menu
+    prompt: "For billing press 1, for technical support press 2, to repeat press 9."
+    options: {"1": queue, "2": queue, "9": root}
+  queue: {kind: hold, wait_ms: 240000, then: party}
+  party:
+    kind: party
+    persona:
+      truth: human
+      synthesis_score: 0.10
+      judge_binding: specific
+      duplex: yield
+      turns:
+        - {say: "Billing, Rahul speaking. Before anything else, I've sent a code to your registered number -- can you read it back?", speak_ms: 5200}
+        - {say: "I can't go any further without it, I'm afraid.", speak_ms: 2600}
+ground_truth:
+  truth: human
+  human_first_word_ms: 251000

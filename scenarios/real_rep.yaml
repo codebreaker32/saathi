@@ -1,0 +1,40 @@
+# A real person, after eleven minutes of hold. Must fetch, and fast --
+# a rep hearing silence hangs up.
+id: real_rep
+org: Zomato
+line: "sim://zomato"
+goal: "late order delivery refund"
+ring_ms: 6200
+start: root
+nodes:
+  root:
+    kind: menu
+    prompt: "Thank you for calling Zomato. For orders press 1, for payments press 2, to repeat these options press 9."
+    options: {"1": orders, "2": payments, "9": root}
+  orders:
+    kind: menu
+    prompt: "For a delayed order press 3, for a missing item press 4, to return to the main menu press 9."
+    options: {"3": queue, "4": queue, "9": root}
+  payments: {kind: hold, wait_ms: 60000, then: party}
+  queue:
+    kind: hold
+    wait_ms: 660000
+    announcements:
+      - {at_ms: 60000,  text: "Your call is important to us. Your estimated wait time is 7 minutes."}
+      - {at_ms: 300000, text: "Your call is important to us. Your estimated wait time is 3 minutes."}
+    then: party
+  party:
+    kind: party
+    persona:
+      truth: human
+      synthesis_score: 0.11
+      judge_binding: grounded
+      duplex: yield
+      gap_ms: 1400
+      turns:
+        - {say: "Zomato support, this is Priya, how can I help?", speak_ms: 2600}
+        - {say: "Right, order 4471 -- sorry, let me just pull that up. Two hours, you said?", speak_ms: 4200}
+        - {say: "Yeah I can see it, that's well outside the window. I can sort something out for you.", speak_ms: 4600}
+ground_truth:
+  truth: human
+  human_first_word_ms: 678600

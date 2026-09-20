@@ -1,0 +1,34 @@
+# The case that justifies having more than one family.
+#
+# This is a RECORDING of a real person -- a canned greeting played by the
+# switch. The anti-spoofing model scores it as genuine, because acoustically
+# it IS genuine: a human really said those words, once, into a microphone.
+# SYNTHESIS is useless here.
+#
+# What catches it is that the identical sentence was heard on a previous call
+# to this number. Different families catch different machines, and that
+# coverage -- not just decorrelation -- is the argument for the whole design.
+id: recorded_human
+org: Amazon
+line: "sim://amazon"
+goal: "refund not received order"
+ring_ms: 4800
+known_prompts:
+  - "Thanks for holding, this is customer care, please state your order number after the tone."
+start: root
+nodes:
+  root:
+    kind: menu
+    prompt: "For orders press 1, for returns and refunds press 2, to repeat press 9."
+    options: {"1": queue, "2": queue, "9": root}
+  queue: {kind: hold, wait_ms: 300000, then: party}
+  party:
+    kind: party
+    persona:
+      truth: bot
+      synthesis_score: 0.09     # a real human voice: SYNTHESIS says "genuine"
+      judge_binding: none
+      duplex: steamroll
+      turns:
+        - {say: "Thanks for holding, this is customer care, please state your order number after the tone.", speak_ms: 5200}
+ground_truth: {truth: bot, human_first_word_ms: null}

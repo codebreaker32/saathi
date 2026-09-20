@@ -1,0 +1,19 @@
+id: amazon.refund_missing
+company: Amazon
+line: sim://amazon
+problem: "Refund not received"
+goal: "Refund was promised but has not arrived"
+lookup_key: registered_phone
+facts_required:
+  - {field: registered_phone, tag: SAFE_TO_STATE, from: login}
+  - {field: order_id, tag: SAFE_TO_STATE}
+  - {field: refund_promised_on, tag: SAFE_TO_STATE}
+  - {field: amount, tag: SAFE_TO_STATE}
+  # declared so the app can warn you what you will be asked for.
+  # the value is never fetched, never briefed, never reachable.
+  - {field: card_last4, tag: NEVER, from: never}
+  - {field: registered_otp, tag: NEVER, from: never}
+ivr_path: []
+expected_asks: []
+offer_options: []
+success: [reference_number, resolution_stated]

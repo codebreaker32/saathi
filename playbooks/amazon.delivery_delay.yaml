@@ -1,0 +1,18 @@
+id: amazon.delivery_delay
+company: Amazon
+line: sim://amazon
+problem: "Delivery late"
+goal: "Late delivery - seek refund or credit"
+lookup_key: registered_phone
+facts_required:
+  - {field: registered_phone, tag: SAFE_TO_STATE, from: login}
+  - {field: order_id, tag: SAFE_TO_STATE}
+  - {field: ordered_at, tag: SAFE_TO_STATE}
+  # declared so the app can warn you what you will be asked for.
+  # the value is never fetched, never briefed, never reachable.
+  - {field: card_last4, tag: NEVER, from: never}
+  - {field: registered_otp, tag: NEVER, from: never}
+ivr_path: []
+expected_asks: []
+offer_options: []
+success: [reference_number, resolution_stated]

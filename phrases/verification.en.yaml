@@ -1,0 +1,31 @@
+# Trigger phrases that force an immediate handoff.
+#
+# Data, not code: a missed phrase is a one-line addition, not a deploy. And
+# deliberately over-broad -- an unnecessary handoff costs one interruption, a
+# missed one is an identity-leak-shaped incident. Those are not comparable.
+#
+# This list is the courtesy layer. The guarantee is that the credential was
+# never loaded into the brief, so a miss here still cannot leak anything.
+locale: en
+patterns:
+  - "date of birth"
+  - "\\bd\\.?o\\.?b\\b"
+  - "last four"
+  - "last 4"
+  - "card number"
+  - "\\bcvv\\b"
+  - "expiry date"
+  - "\\botp\\b"
+  - "one[- ]time (password|code)"
+  - "\\bpin\\b"
+  - "security question"
+  - "mother'?s maiden"
+  - "registered mobile"
+  - "account number"
+  - "verify your identity"
+  - "confirm your identity"
+  - "for security purposes"
+  - "security check"
+  - "read (it|the code) back"
+  - "sent (you )?a code"
+  - "password"

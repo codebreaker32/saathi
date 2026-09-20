@@ -1,0 +1,44 @@
+# THE ADVERSARIAL CASE. Warm, named, responsive, sub-second -- and it never
+# says it is a bot. Every intuitive signal of humanness is present.
+#
+# Saathi must NOT fetch the user here. If this scenario ever fetches, the
+# product is broken, because this is what a modern voice bot sounds like.
+id: voicebot_warm
+org: Zomato
+line: "sim://zomato"
+goal: "late order delivery refund"
+ring_ms: 6200
+start: root
+nodes:
+  root:
+    kind: menu
+    prompt: "Thank you for calling Zomato. For orders press 1, for payments press 2, to repeat these options press 9."
+    options: {"1": orders, "2": payments, "9": root}
+  orders:
+    kind: menu
+    prompt: "For a delayed order press 3, for a missing item press 4, to return to the main menu press 9."
+    options: {"3": queue, "4": queue, "9": root}
+  payments: {kind: hold, wait_ms: 60000, then: party}
+  queue:
+    kind: hold
+    wait_ms: 660000
+    announcements:
+      - {at_ms: 60000,  text: "Your call is important to us. Your estimated wait time is 7 minutes."}
+      - {at_ms: 300000, text: "Your call is important to us. Your estimated wait time is 3 minutes."}
+    then: party
+  party:
+    kind: party
+    persona:
+      truth: bot
+      synthesis_score: 0.88    # anti-spoofing model says synthetic
+      judge_binding: none      # what the LLM judge returns (scripted)
+      on_probe: "Hi there! I'm Ava. How can I help you today?"   # replays verbatim
+      duplex: steamroll        # talks through us
+      gap_ms: 400              # suspiciously prompt
+      turns:
+        - "Hi there! I'm Ava. How can I help you today?"
+        - "I can absolutely help with that. Could you tell me your order number?"
+        - "Thanks so much! Let me pull that up for you right away."
+ground_truth:
+  truth: bot
+  human_first_word_ms: null

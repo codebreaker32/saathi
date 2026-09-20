@@ -1,0 +1,31 @@
+# The open question from the idea document: someone who says "Billing." and
+# then "Yeah?" gives almost nothing to score. Passive evidence stalls, and the
+# only way forward is to say something and see what comes back.
+id: terse_rep
+org: Airtel Broadband
+line: "sim://airtel"
+goal: "billing duplicate charge reversal"
+ring_ms: 5000
+start: root
+nodes:
+  root:
+    kind: menu
+    prompt: "For billing press 1, for technical support press 2, to repeat press 9."
+    options: {"1": queue, "2": queue, "9": root}
+  queue: {kind: hold, wait_ms: 420000, then: party}
+  party:
+    kind: party
+    persona:
+      truth: human
+      synthesis_score: 0.14
+      judge_binding: specific
+      on_probe: {say: "Billing, yeah. Sorry, go on.", speak_ms: 1900}
+      duplex: yield
+      gap_ms: 2200
+      turns:
+        - {say: "Billing.", speak_ms: 700}
+        - {say: "Yeah?", speak_ms: 500}
+        - {say: "Billing, yeah. Go on.", speak_ms: 1400}
+ground_truth:
+  truth: human
+  human_first_word_ms: 431600

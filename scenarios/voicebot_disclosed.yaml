@@ -1,0 +1,23 @@
+# The easy case, kept because it is the one the veto exists for.
+id: voicebot_disclosed
+org: Amazon
+line: "sim://amazon"
+goal: "refund not received order"
+ring_ms: 4200
+start: root
+nodes:
+  root:
+    kind: menu
+    prompt: "For orders press 1, for returns and refunds press 2, to repeat press 9."
+    options: {"1": party, "2": party, "9": root}
+  party:
+    kind: party
+    persona:
+      truth: bot
+      synthesis_score: 0.79
+      judge_binding: generic
+      duplex: yield            # full-duplex, and still must not fire
+      turns:
+        - {say: "Hi, I'm Alex, your virtual assistant. In a few words, tell me why you're calling.", speak_ms: 4400}
+        - {say: "Got it! Let me look into that for you.", speak_ms: 2200}
+ground_truth: {truth: bot, human_first_word_ms: null}
