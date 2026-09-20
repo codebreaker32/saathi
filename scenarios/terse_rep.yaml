@@ -2,6 +2,7 @@
 # then "Yeah?" gives almost nothing to score. Passive evidence stalls, and the
 # only way forward is to say something and see what comes back.
 id: terse_rep
+display: "Someone abrupt"
 org: Airtel Broadband
 line: "sim://airtel"
 goal: "billing duplicate charge reversal"

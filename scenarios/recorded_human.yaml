@@ -9,6 +9,7 @@
 # to this number. Different families catch different machines, and that
 # coverage -- not just decorrelation -- is the argument for the whole design.
 id: recorded_human
+display: "A recording of a person"
 org: Amazon
 line: "sim://amazon"
 goal: "refund not received order"

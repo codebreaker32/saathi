@@ -1,6 +1,7 @@
 # A real person, after eleven minutes of hold. Must fetch, and fast --
 # a rep hearing silence hangs up.
 id: real_rep
+display: "A real person"
 org: Zomato
 line: "sim://zomato"
 goal: "late order delivery refund"

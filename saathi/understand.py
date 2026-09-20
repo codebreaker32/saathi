@@ -52,12 +52,12 @@ def _score(pb: Playbook, text: str) -> tuple[int, list[str]]:
     hits, pts = [], 0
     if pb.company.lower().split()[0] in t:
         pts += 3
-        hits.append(f"named {pb.company}")
+        hits.append(f"you named {pb.company}")
     kind = pb.id.split(".", 1)[1]
     for w in PROBLEM_WORDS.get(kind, ()):
         if w in t:
             pts += 2
-            hits.append(f"said '{w}'")
+            hits.append(f"you mentioned '{w}'")
             break
     return pts, hits
 
@@ -146,7 +146,8 @@ def understand(text: str, playbooks: dict[str, Playbook] | None = None,
         named = [p for p in specific.values()
                  if p.company.lower().split()[0] == company.lower().split()[0]]
         scored = sorted(((_score(p, company + " " + text)[0] + 3,
-                          [f"you said {company}"], p) for p in named),
+                          [f"Saathi knows this line for {company}"], p)
+                         for p in named),
                         key=lambda x: -x[0]) or [(0, [], None)]
     else:
         scored = sorted(((*_score(p, text), p) for p in specific.values()),
@@ -165,8 +166,8 @@ def understand(text: str, playbooks: dict[str, Playbook] | None = None,
         generic = pbs.get(GENERIC_ID)
         if generic is None:
             return Understanding(None, {}, "none",
-                                 "no playbook matched -- name the company and "
-                                 "what went wrong")
+                                 "Saathi could not tell who to call. Name the "
+                                 "company and say what went wrong.")
         named = company or company_in(text)
         if named:
             generic = replace(generic, company=named)
@@ -180,9 +181,10 @@ def understand(text: str, playbooks: dict[str, Playbook] | None = None,
             facts["amount"] = (m.group(1) or m.group(2)).replace(",", "")
         return Understanding(
             generic, facts, "low",
-            (f"no playbook for {named}" if named else "no company recognised")
-            + " -- Saathi will state the problem and ask for a reference number, "
-              "and will not agree to anything")
+            (f"Saathi has no script for {named}, so it will keep to the basics: "
+             if named else
+             "No company was named, so Saathi will keep to the basics: ")
+            + "explain the problem, ask for a reference number, and agree to nothing.")
 
     facts: dict[str, str] = {}
     safe = {f.field for f in pb.safe_fields()}

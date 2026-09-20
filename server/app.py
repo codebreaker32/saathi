@@ -177,9 +177,14 @@ def _by_line(line: str | None) -> list[dict]:
         sc = load(p.stem)
         if line is not None and sc.get("line") != line:
             continue
+        # A plain name from the scenario itself. The filename was being shown
+        # raw -- "generic rep", "bot settles refund" -- which is shorthand for
+        # whoever wrote the file, not something a caller would ever say.
+        truth = sc.get("ground_truth", {}).get("truth")
         out.append({"id": p.stem,
-                    "truth": sc.get("ground_truth", {}).get("truth"),
-                    "label": p.stem.replace("_", " ")})
+                    "truth": truth,
+                    "who": "a person" if truth == "human" else "a machine",
+                    "label": sc.get("display") or p.stem.replace("_", " ")})
     # a genuine human first: the default should be the ordinary case
     out.sort(key=lambda s: (s["truth"] != "human", s["id"]))
     return out

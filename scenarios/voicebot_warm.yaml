@@ -4,6 +4,7 @@
 # Saathi must NOT fetch the user here. If this scenario ever fetches, the
 # product is broken, because this is what a modern voice bot sounds like.
 id: voicebot_warm
+display: "A friendly-sounding robot"
 org: Zomato
 line: "sim://zomato"
 goal: "late order delivery refund"

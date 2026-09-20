@@ -1,6 +1,7 @@
 # Nobody ever answers. The correct behaviour is to keep waiting quietly and
 # never fetch -- not to get bored and decide the hold music is a person.
 id: ivr_only
+display: "Nobody ever answers"
 org: Airtel Broadband
 line: "sim://airtel"
 goal: "billing duplicate charge reversal"

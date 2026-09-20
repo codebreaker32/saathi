@@ -2,6 +2,7 @@
 # most calls that touch the account. The handoff must fire on the first
 # sentence, before anything else happens.
 id: verify_immediately
+display: "They ask to check who you are"
 org: Airtel Broadband
 line: "sim://airtel"
 goal: "billing duplicate charge reversal"

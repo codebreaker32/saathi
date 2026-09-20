@@ -13,6 +13,7 @@
 # respond to a problem it was not written for, and pretending otherwise is how
 # the demo ends up lying about what the caller said.
 id: generic_rep
+display: "A support advisor"
 org: The company
 line: "sim://generic"
 goal: "resolve the problem the user described"

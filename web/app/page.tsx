@@ -12,11 +12,11 @@ const API = process.env.NEXT_PUBLIC_API ?? "http://127.0.0.1:8787";
    three is a scenario constant, and one row can never light under any input. */
 const CHECKS: { id: string; name: string; asks: string; flag: string; tip: string }[] = [
   { id: "SYNTHESIS",   name: "Real voice",     asks: "Does the voice sound recorded by a person, or generated?",
-    flag: "scripted",     tip: "A value read from the scenario, not a measurement. Every fetch this build can produce depends on it." },
+    flag: "stood in for", tip: "A stand-in value rather than something measured. Every call that reaches you today rests on it." },
   { id: "IDENTITY",    name: "Same person",    asks: "Is this still whoever was speaking a moment ago?",
-    flag: "not wired",    tip: "No speaker-embedding signal is computed anywhere in the codebase, so this row can never light." },
+    flag: "not built yet", tip: "Nothing checks this at all today, so this row can never light up." },
   { id: "REPETITION",  name: "Said it before", asks: "Have we heard this exact sentence on an earlier call?",
-    flag: "machine only", tip: "Every weight in this family is negative. It can argue that the line is a machine; it can never vote for a person." },
+    flag: "machine only", tip: "This one can only ever point to a machine. It never counts towards deciding someone is a real person." },
   { id: "CONTINGENCY", name: "Replying to us", asks: "Does their answer depend on what Saathi actually said?",
     flag: "",             tip: "" },
   { id: "DUPLEX",      name: "Takes turns",    asks: "Do they stop when interrupted, the way people do?",
@@ -322,7 +322,7 @@ export default function Page() {
                 ))}
               </div>
               <div className="mt-4 text-[12px]" style={{ color: "var(--faint)" }}>
-                matched because it {understood.why}
+                {understood.why}
               </div>
 
               <div className="mt-5 p-3 rounded-xl" style={{ background: "var(--surface-2)" }}>
@@ -339,15 +339,16 @@ export default function Page() {
               <div className="mt-5">
                 <div className="eyebrow mb-2">Who picks up</div>
                 <div className="text-[12px] mb-2" style={{ color: "var(--faint)" }}>
-                  This is a practice line, so you choose who answers. Try the voice bot —
-                  it sounds completely human and Saathi still shouldn&apos;t call you.
+                  This is a practice line, so you choose who answers. Try one of the
+                  machines — it sounds completely human, and Saathi still shouldn&apos;t
+                  call you.
                 </div>
                 <div className="flex gap-2 flex-wrap">
                   {(understood.scenarios ?? []).map((s: any) => (
                     <button key={s.id} onClick={() => setScenario(s.id)}
                       className="btn" style={scenario === s.id
                         ? { borderColor: "var(--primary)", color: "var(--primary)" } : {}}>
-                      {s.label} <span style={{ color: "var(--faint)" }}>· {s.truth}</span>
+                      {s.label} <span style={{ color: "var(--faint)" }}>· {s.who ?? s.truth}</span>
                     </button>
                   ))}
                 </div>
@@ -487,9 +488,10 @@ export default function Page() {
             <div className="mt-5 space-y-1.5">
               <div className="text-[12px] mb-2" style={{ color: "var(--muted)" }}>
                 Saathi won&apos;t call you until <strong>three signs</strong> agree it&apos;s a
-                person. Only three of the five below can vote that way at all, and one of
-                those (&ldquo;Real voice&rdquo;) is a scripted stand-in &mdash; so nothing is
-                fetched without it today. That is a limit of this build, not redundancy.
+                person. Only three of the five below can point that way at all, and one of
+                those (&ldquo;Real voice&rdquo;) is a stand-in rather than a real check
+                &mdash; so nothing reaches you without it today. That is a limit of what is
+                built so far, not spare capacity.
               </div>
               {CHECKS.map(c => {
                 const on = voted.includes(c.id);
@@ -530,7 +532,8 @@ export default function Page() {
                 <div className="mt-1">{det?.reason ?? "gathering evidence"}</div>
                 <div className="mt-1" style={{ color: "var(--faint)" }}>
                   Evidence families: {CHECKS.map(c => c.id.toLowerCase()).join(", ")}.
-                  Amber ones are not measured: scripted, unwired, or machine-evidence only.
+                  Amber ones are not measured yet: stood in for, not built, or only ever
+                  a sign of a machine.
                 </div>
               </div>
             )}
@@ -683,7 +686,7 @@ function Summary({ ended, onReset, onPrefill }: {
         <Field k="offered" v={c.offer_made
           ? [rs(c.offer_amount_paise), c.offer_kind].filter(Boolean).join(" ")
           : "nothing"} />
-        <Field k="accepted" v={c.accepted ? "yes, within your mandate" : "no"} />
+        <Field k="accepted" v={c.accepted ? "yes, within what you allowed" : "no"} />
         <Field k="handled alone" v={c.settled_alone ? "yes, you were never needed"
           : c.fetched ? "no, you took the call"
           : c.handed_over ? "no, handed to you" : "no"} />

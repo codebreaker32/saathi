@@ -1,5 +1,6 @@
 # The easy case, kept because it is the one the veto exists for.
 id: voicebot_disclosed
+display: "A robot that admits it"
 org: Amazon
 line: "sim://amazon"
 goal: "refund not received order"

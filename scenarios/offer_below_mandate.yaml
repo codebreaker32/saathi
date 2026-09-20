@@ -5,6 +5,7 @@
 # bound this call would quietly succeed -- 150 is "under budget" -- which is
 # precisely inverted from what anyone wants when money is offered TO them.
 id: offer_below_mandate
+display: "An automated assistant that lowballs"
 org: Zomato
 line: "sim://zomato-alt"
 goal: "late order delivery refund"
