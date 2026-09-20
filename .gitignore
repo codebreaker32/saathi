@@ -2,7 +2,11 @@
 __pycache__/
 *.pyc
 .pytest_cache/
-.voice-cache/
+# .voice-cache is COMMITTED. It is 6.9MB of pre-rendered Polly speech, and
+# the deployed host cannot render its own: iam:CreateInstanceProfile is
+# denied on this account, so the instance cannot be given a role that calls
+# Polly. Shipping the clips needs no AWS permissions at all.
+# .voice-cache/
 *.wav
 .env.bedrock
 web/node_modules/
