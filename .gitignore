@@ -9,3 +9,6 @@ web/node_modules/
 web/.next/
 web/out/
 .env
+
+# Generated bench corpus: ~56MB of audio, rebuildable with `python -m bench.corpus --build`
+bench/corpus/

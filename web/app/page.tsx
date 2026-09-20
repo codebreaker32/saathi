@@ -6,14 +6,22 @@ const API = process.env.NEXT_PUBLIC_API ?? "http://127.0.0.1:8787";
 /* The detector's families, said the way a person would say them. Nobody
    outside this codebase knows what CONTINGENCY means, and a bar labelled
    with it tells a user nothing about whether to trust the thing. */
-const CHECKS = [
-  { id: "SYNTHESIS",   name: "Real voice",     asks: "Does the voice sound recorded by a person, or generated?" },
-  { id: "IDENTITY",    name: "Same person",    asks: "Is this still whoever was speaking a moment ago?" },
-  { id: "REPETITION",  name: "Said it before", asks: "Have we heard this exact sentence on an earlier call?" },
-  { id: "CONTINGENCY", name: "Replying to us", asks: "Does their answer depend on what Saathi actually said?" },
-  { id: "DUPLEX",      name: "Takes turns",    asks: "Do they stop when interrupted, the way people do?" },
+/* `flag` is what the row is NOT. Rendering five rows with one shared "not
+   measured yet" marker read as a pool with redundancy, which is the opposite
+   of the truth: only three of these can vote for a person at all, one of the
+   three is a scenario constant, and one row can never light under any input. */
+const CHECKS: { id: string; name: string; asks: string; flag: string; tip: string }[] = [
+  { id: "SYNTHESIS",   name: "Real voice",     asks: "Does the voice sound recorded by a person, or generated?",
+    flag: "scripted",     tip: "A value read from the scenario, not a measurement. Every fetch this build can produce depends on it." },
+  { id: "IDENTITY",    name: "Same person",    asks: "Is this still whoever was speaking a moment ago?",
+    flag: "not wired",    tip: "No speaker-embedding signal is computed anywhere in the codebase, so this row can never light." },
+  { id: "REPETITION",  name: "Said it before", asks: "Have we heard this exact sentence on an earlier call?",
+    flag: "machine only", tip: "Every weight in this family is negative. It can argue that the line is a machine; it can never vote for a person." },
+  { id: "CONTINGENCY", name: "Replying to us", asks: "Does their answer depend on what Saathi actually said?",
+    flag: "",             tip: "" },
+  { id: "DUPLEX",      name: "Takes turns",    asks: "Do they stop when interrupted, the way people do?",
+    flag: "",             tip: "" },
 ];
-const SCRIPTED = new Set(["SYNTHESIS", "IDENTITY"]);
 
 const VERDICT: Record<string, { say: string; tone: string }> = {
   FETCH:     { say: "That's a person",  tone: "var(--success)" },
@@ -67,6 +75,15 @@ export default function Page() {
   const [callMs, setCallMs] = useState(0);
   const [det, setDet] = useState<Frame | null>(null);
   const [phase, setPhase] = useState("Dialling");
+  const [toNumber, setToNumber] = useState("");
+  const [tel, setTel] = useState<{live: boolean; why: string; from_number: string | null} | null>(null);
+
+  // Whether a number typed below will actually be dialled. Asked once, and
+  // rendered honestly: a demo that implies it placed a call it never placed
+  // is the one failure this project cannot afford.
+  useEffect(() => {
+    fetch(`${API}/api/telephony`).then(r => r.json()).then(setTel).catch(() => setTel(null));
+  }, []);
   const [summoned, setSummoned] = useState(false);
   const [mode, setMode] = useState<string | null>(null);
   const [ended, setEnded] = useState<Frame | null>(null);
@@ -130,6 +147,7 @@ export default function Page() {
         problem,
         facts: { registered_phone: "98765 41182", ...(understood?.facts ?? {}) },
         mandate: mandate?.mandate ?? {},
+        to_number: toNumber.trim(),
       }),
     }).then(r => r.json()).catch(() => ({ session: "" }));
 
@@ -145,7 +163,12 @@ export default function Page() {
       if (f.type === "utterance" || f.type === "probe") setPhase("Someone is speaking");
       if (f.type === "summon") { setSummoned(true); setPhase("Fetching you"); }
       if (f.type === "handoff") { setSummoned(true); setPhase("Handed to you"); }
-      if (f.type === "ended") { setEnded(f); setStage("summary"); src.close(); }
+      if (f.type === "ended") {
+        // The phase label was left at whatever the last frame set it to,
+        // so a finished call still read "On hold".
+        setEnded(f); setPhase(f.conclusion?.ended_label ?? "Call ended");
+        setStage("summary"); src.close();
+      }
       if (f.audio) say(f.audio);
     };
     src.onerror = () => src.close();
@@ -300,7 +323,45 @@ export default function Page() {
             </div>
           )}
 
-          <div className="flex gap-2 mt-6 flex-wrap">
+          <div className="mt-6 p-3 rounded-xl" style={{ background: "var(--surface-2)" }}>
+            <div className="eyebrow mb-2">number to call</div>
+            <input value={toNumber} onChange={e => setToNumber(e.target.value)}
+              placeholder="+91 80 4718 3000"
+              style={{ width: "100%", padding: "8px 12px", borderRadius: 10,
+                       border: "1px solid var(--border)", background: "var(--surface)",
+                       color: "var(--foreground)", fontSize: 14 }} />
+            <div className="text-[12px] mt-2" style={{
+              color: tel?.live ? "var(--success)" : "var(--warning)" }}>
+              {tel === null
+                ? "checking whether live calling is configured…"
+                : tel.live
+                  ? `Live. Saathi will dial this from ${tel.from_number}.`
+                  : "Not live yet — " + tel.why}
+            </div>
+            <button className="btn" style={{ marginTop: 10, padding: "6px 14px", fontSize: 13 }}
+              disabled={!tel?.live || !toNumber.trim() || busy}
+              onClick={async () => {
+                setBusy(true);
+                try {
+                  const r = await fetch(`${API}/api/testcall`, {
+                    method: "POST", headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({ to_number: toNumber.trim() }),
+                  }).then(x => x.json());
+                  setTel(t => t && ({ ...t, why: r.placed ? `calling now (${r.sid})` : r.why }));
+                } finally { setBusy(false); }
+              }}>
+              {busy ? "Dialling…" : "Test call"}
+            </button>
+            {tel && !tel.live && (
+              <div className="text-[12px] mt-1" style={{ color: "var(--faint)" }}>
+                Set TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN, TWILIO_FROM_NUMBER and
+                SAATHI_PUBLIC_URL in .env, then restart the server. Twilio cannot reach
+                localhost, so the public URL must be a tunnel.
+              </div>
+            )}
+          </div>
+
+          <div className="flex gap-2 mt-4 flex-wrap">
             <button className="btn ghost" onClick={() => setStage("understanding")}>Back</button>
             <button className="btn" onClick={checkMandate} disabled={busy || !mandateText.trim()}>
               {busy ? "Checking…" : "Read it back"}
@@ -351,12 +412,14 @@ export default function Page() {
 
             <div className="mt-5 space-y-1.5">
               <div className="text-[12px] mb-2" style={{ color: "var(--muted)" }}>
-                Saathi won&apos;t call you until <strong>three different signs</strong> agree
-                it&apos;s a person. Any one on its own can be faked.
+                Saathi won&apos;t call you until <strong>three signs</strong> agree it&apos;s a
+                person. Only three of the five below can vote that way at all, and one of
+                those (&ldquo;Real voice&rdquo;) is a scripted stand-in &mdash; so nothing is
+                fetched without it today. That is a limit of this build, not redundancy.
               </div>
               {CHECKS.map(c => {
                 const on = voted.includes(c.id);
-                const scripted = SCRIPTED.has(c.id);
+                const flagged = c.flag !== "";
                 return (
                   <div key={c.id} className="flex items-center gap-2.5" title={c.asks}>
                     <span style={{ width: 15, color: on ? "var(--success)" : "var(--faint)" }}>
@@ -368,12 +431,12 @@ export default function Page() {
                     </span>
                     <span className="bar flex-1">
                       <i style={{ width: on ? "100%" : "0%",
-                        background: scripted ? "var(--warning)" : "var(--success)" }} />
+                        background: flagged ? "var(--warning)" : "var(--success)" }} />
                     </span>
-                    {scripted && (
+                    {flagged && (
                       <span className="text-[10px] shrink-0" style={{ color: "var(--warning)" }}
-                        title="Not measured yet — a stand-in value while the real model is built">
-                        not measured yet
+                        title={c.tip}>
+                        {c.flag}
                       </span>
                     )}
                   </div>
@@ -393,7 +456,7 @@ export default function Page() {
                 <div className="mt-1">{det?.reason ?? "gathering evidence"}</div>
                 <div className="mt-1" style={{ color: "var(--faint)" }}>
                   Evidence families: {CHECKS.map(c => c.id.toLowerCase()).join(", ")}.
-                  Amber ones are scripted stand-ins, not measured models.
+                  Amber ones are not measured: scripted, unwired, or machine-evidence only.
                 </div>
               </div>
             )}
@@ -429,27 +492,13 @@ export default function Page() {
       )}
 
       {stage === "summary" && ended && (
-        <Frame eyebrow="Call complete" title={
-          ended.false_fetch ? "It fetched you for a machine"
-            : ended.truth === "bot" ? "Correctly held"
-            : ended.fetched ? "A person answered and you were fetched"
-            : ended.handed_off ? "Handed over for verification"
-            : "Missed a human"}
-          sub={ended.false_fetch
-            ? "This is the failure that breaks the product."
-            : ended.truth === "bot"
-              ? "It was a machine the whole time, and you were never disturbed."
-              : "Everything above is what actually happened on the line."}>
-          <div className="grid sm:grid-cols-4 gap-3">
-            <Field k="truth" v={ended.truth} />
-            <Field k="fetched" v={ended.fetched ? clock(ended.fetched_at_ms) : "never"} />
-            <Field k="agreed" v={(ended.families ?? []).join(", ") || "—"} />
-            <Field k="probes" v={String(ended.probes)} />
-          </div>
-          <div className="flex gap-2 mt-6">
-            <button className="btn primary" onClick={reset}>New call</button>
-          </div>
-        </Frame>
+        <Summary ended={ended} onReset={reset} onPrefill={(sentence) => {
+          /* A next action hands back a SENTENCE, never a mandate field. It
+             lands on the authoring screen and goes through parse() and the
+             read-back like anything the user typed, so no button can widen
+             authority on its own. */
+          setMandateText(sentence); setMandate(null); setStage("permission");
+        }} />
       )}
     </main>
   );
@@ -501,6 +550,142 @@ function Ctl({ label, hint, on, danger, disabled, onClick }: any) {
       </button>
       <span className="text-[10px]" style={{ color: "var(--faint)" }}>{hint}</span>
     </div>
+  );
+}
+
+/* The post-call dashboard. Deliberately NOT a transcript: the person did not
+   listen to the call, so replaying it to them is work rather than an answer.
+   Everything here was recorded as the call ran -- a refused offer leaves
+   nothing behind to re-parse afterwards, which is exactly the case a
+   reconstruct-at-the-end summary would lose. */
+function Summary({ ended, onReset, onPrefill }: {
+  ended: Frame; onReset: () => void; onPrefill: (sentence: string) => void;
+}) {
+  const c: any = ended.conclusion ?? {};
+  const t: any = ended.timing ?? {};
+  const notes: any[] = ended.notes ?? [];
+  const actions: any[] = ended.next_actions ?? [];
+  const rs = (p: number | null | undefined) =>
+    p === null || p === undefined ? null : "\u20b9" + (p / 100).toFixed(0);
+
+  const verdict = c.accepted ? "var(--success)"
+    : c.escalated ? "var(--warning)" : "var(--muted)";
+
+  return (
+    <Frame eyebrow="After the call" title={c.ended_label ?? "Call ended"}
+      sub={c.ended_detail || "Everything below was noted while the call was running."}>
+
+      {/* Time. Three different numbers exist and only these two were measured,
+          so the word "recording" appears nowhere -- the audio is not this long. */}
+      <div className="flex flex-wrap items-baseline gap-x-6 gap-y-1 mb-5">
+        <div>
+          <span className="text-[26px] font-extrabold">{t.on_line ?? "--"}</span>
+          <span className="text-[12px] ml-2" style={{ color: "var(--muted)" }}>
+            on the line
+          </span>
+        </div>
+        {t.speech && (
+          <div className="text-[12px]" style={{ color: "var(--faint)" }}>
+            {t.speech} of it was anyone actually speaking
+          </div>
+        )}
+      </div>
+      {t.headline && (
+        <div className="mb-5 p-3 rounded-xl text-[13px]"
+          style={{ background: "var(--surface-2)", color: "var(--foreground)" }}>
+          {t.headline}
+        </div>
+      )}
+
+      {/* The conclusion, as fields rather than prose. */}
+      <div className="grid sm:grid-cols-4 gap-3">
+        <Field k="offered" v={c.offer_made
+          ? [rs(c.offer_amount_paise), c.offer_kind].filter(Boolean).join(" ")
+          : "nothing"} />
+        <Field k="accepted" v={c.accepted ? "yes, within your mandate" : "no"} />
+        <Field k="handled alone" v={c.settled_alone ? "yes, you were never needed"
+          : c.fetched ? "no, you took the call"
+          : c.handed_over ? "no, handed to you" : "no"} />
+        <Field k="reference" v={c.reference_number ?? "none captured"} />
+      </div>
+
+      {c.escalated && c.escalated_why && (
+        <div className="mt-4 p-3 rounded-xl text-[13px]"
+          style={{ background: "var(--surface-2)", color: verdict }}>
+          <strong>Saathi did not accept it.</strong> {c.escalated_why}
+        </div>
+      )}
+
+      {/* What was noted, as it happened. */}
+      {notes.length > 0 && (
+        <div className="mt-6">
+          <div className="eyebrow mb-2">what Saathi noted</div>
+          <div className="space-y-1.5">
+            {notes.map((n, i) => (
+              <div key={i} className="flex gap-3 text-[13px]">
+                <span className="shrink-0 tabular-nums" style={{ color: "var(--faint)" }}>
+                  {Math.floor(n.t_ms / 60000)}:
+                  {String(Math.floor(n.t_ms / 1000) % 60).padStart(2, "0")}
+                </span>
+                <span>
+                  {n.text}
+                  {n.detail && (
+                    <span className="block text-[12px]" style={{ color: "var(--faint)" }}>
+                      {n.detail}
+                    </span>
+                  )}
+                </span>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* Unconditional. Not a branch and not dismissible. */}
+      {(c.not_confirmed ?? []).length > 0 && (
+        <div className="mt-6">
+          <div className="eyebrow mb-2" style={{ color: "var(--warning)" }}>
+            not confirmed
+          </div>
+          <ul className="space-y-1">
+            {(c.not_confirmed ?? []).map((line: string, i: number) => (
+              <li key={i} className="text-[12px]" style={{ color: "var(--muted)" }}>
+                &middot; {line}
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
+
+      {/* Next actions. A button hands back a sentence for the authoring screen,
+          never a mandate field, so tapping one cannot widen your authority. */}
+      {actions.length > 0 && (
+        <div className="mt-6">
+          <div className="eyebrow mb-2">what you can do now</div>
+          <div className="space-y-2">
+            {actions.map((a) => (
+              <div key={a.id} className="p-3 rounded-xl"
+                style={{ background: "var(--surface-2)" }}>
+                <div className="flex items-center justify-between gap-3 flex-wrap">
+                  <span className="text-[13px] font-semibold">{a.label}</span>
+                  {a.prefill
+                    ? <button className="btn primary" style={{ padding: "4px 12px", fontSize: 12 }}
+                        onClick={() => onPrefill(a.prefill)}>Review permission</button>
+                    : null}
+                </div>
+                <div className="text-[12px] mt-1" style={{ color: "var(--muted)" }}>
+                  {a.detail}
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      <div className="flex gap-2 mt-6">
+        <button className="btn primary" onClick={onReset}>New call</button>
+      </div>
+    </Frame>
   );
 }
 

@@ -29,10 +29,11 @@ from saathi.evidence.repetition import RepetitionDetector
 from saathi.navigate import choose, parse_menu
 from saathi.session.machine import step
 from saathi.session.states import SessionState
+from saathi.mandate import MandateError, accept_offer
 from saathi.types import (
     Answered, Dialed, Family, HoldMusicDetected, HumanDetected, LineState,
-    MenuDetected, RemoteUtterance, Ringing, SignalObservation, Speak,
-    SummonUser, VerifyAsk,
+    Mandate, MenuDetected, OfferMade, RemoteUtterance, Ringing,
+    SignalObservation, Speak, SummonUser, VerifyAsk,
 )
 from saathi.verification import VerificationDetector
 
@@ -55,6 +56,32 @@ class Beat:
     detector scores. If the rendered audio cannot reproduce it, the recording
     contradicts the thing it exists to demonstrate.
     """
+    families: tuple[str, ...] = ()
+    """Which families were voting FOR a human at this tick.
+
+    Carried structurally rather than parsed back out of `note`. Verdict.reason
+    only names families on the FETCH branch, so re-deriving them by substring
+    match left the UI's "N of 3 signs agree" counter reading 0 on every tick
+    that was not already a fetch -- i.e. on every tick a viewer is watching to
+    decide whether to trust it.
+    """
+
+
+@dataclass(frozen=True)
+class CallNote:
+    """One thing worth telling the user afterwards, recorded AS IT HAPPENS.
+
+    Not a transcript and not reconstructed at the end. A summary assembled by
+    re-reading the call later is a summary of what we can still parse; this is
+    a summary of what the call actually did. The distinction matters most
+    exactly where it is hardest to re-derive -- an offer that was refused, a
+    figure that was never stated.
+    """
+
+    t_ms: int
+    kind: str            # offer | accepted | escalated | reference | milestone
+    text: str            # one line, already fit to show a person
+    detail: str = ""
 
 
 @dataclass
@@ -68,7 +95,38 @@ class Outcome:
     warm_start: bool = False
     learned: int = 0
     disclosed_before_speaking: bool = True
+    we_spoke: bool = False
+    hold_ms: int = 0
+    ended_at_ms: int = 0
+    """When the call actually stopped, read from the clock.
+
+    NOT beats[-1].t_ms. A hold node writes its "(hold music)" beat when the
+    hold BEGINS and then advances the clock, so on a call that ends while still
+    holding the last beat predates the end. Measured on ivr_only: last beat
+    20:13, real end 25:13 -- five minutes of waiting deleted from the one
+    number the product exists to absorb.
+    """
+    notes: list[CallNote] = field(default_factory=list)
+    offers: list[dict] = field(default_factory=list)
+    accepted: dict | None = None
+    escalated: list[dict] = field(default_factory=list)
+    reference_number: str | None = None
     probes_used: int = 0
+
+    def note(self, t_ms: int, kind: str, text: str, detail: str = "") -> None:
+        self.notes.append(CallNote(t_ms, kind, text, detail))
+
+    @property
+    def settled_alone(self) -> bool:
+        """The call resolved without the user ever being pulled in.
+
+        Deliberately requires that nothing summoned them -- an accepted offer
+        on a call that also handed over is not 'handled alone', and showing it
+        that way would overstate what the agent did.
+        """
+        return (self.accepted is not None
+                and self.fetched_at_ms is None
+                and self.handed_off_at_ms is None)
 
     @property
     def false_fetch(self) -> bool:
@@ -91,7 +149,7 @@ def load(name: str, directory: Path | None = None) -> dict:
 
 
 def run(scenario: dict, goal: str, *, brief=None, verifier=None, store=None,
-        max_hold_ms: int = 1_800_000) -> Outcome:
+        mandate=None, max_hold_ms: int = 1_800_000) -> Outcome:
     """`brief` is the ONLY channel by which user facts reach anything the agent
     says. Nothing else is consulted, which is what makes the whitelist in
     build_brief load-bearing rather than decorative.
@@ -99,7 +157,11 @@ def run(scenario: dict, goal: str, *, brief=None, verifier=None, store=None,
     `verifier` is injectable so a test can empty the trigger-phrase list and
     show that a miss still leaks nothing."""
     clock = VirtualClock()
-    state = SessionState()
+    # The mandate is seeded into the reducer and never re-read from text. The
+    # authoring sentence does not travel with the session, so there is nothing
+    # here for a rep to argue with -- only fields.
+    mandate = mandate or Mandate.empty()
+    state = SessionState(mandate=mandate)
     out = Outcome()
     acc = EpochAccumulator(phase=LineState.IVR)
     rep = RepetitionDetector(destination=scenario.get("line", "sim://unknown"))
@@ -216,6 +278,12 @@ def run(scenario: dict, goal: str, *, brief=None, verifier=None, store=None,
                 acc.add(rep.observe(ann["text"], clock.now_ms(), 4000))
             wait = min(node.get("wait_ms", 60_000), max_hold_ms)
             clock.advance(max(0, start + wait - clock.now_ms()))
+            # Recorded on the call's own clock. The obvious alternative --
+            # subtracting rendered audio length from call length -- mixes two
+            # measurement systems: the yaml's speak_ms are estimates and real
+            # Polly runs longer, so on a short call the subtraction goes
+            # negative and reports a hold of zero on a call that held.
+            out.hold_ms += clock.now_ms() - start
             node_id = node.get("then")
 
         elif kind == "party":
@@ -224,10 +292,21 @@ def run(scenario: dict, goal: str, *, brief=None, verifier=None, store=None,
             # just arrived -- the failure the old design actually had.
             acc = EpochAccumulator(phase=LineState.ASSESSING)
             _party(node["persona"], scenario, clock, acc, rep, verifier,
-                   emit, out, spoken_by_us, ours_spoken, brief)
+                   emit, out, spoken_by_us, ours_spoken, brief, mandate)
             node_id = None
         else:
             node_id = None
+
+    # Computed here rather than in _party, which returns early on a
+    # verification request. Setting them there left BOTH flags at their
+    # defaults for verify_immediately -- it spoke the disclosure and still
+    # scored an unmeasured True, so "disclosed first 8/8" was six measurements
+    # and two defaults. `we_spoke` is what lets the scoreboard say so.
+    out.we_spoke = bool(spoken_by_us)
+    out.disclosed_before_speaking = (
+        not spoken_by_us or spoken_by_us[0] == "disclosure")
+
+    out.ended_at_ms = clock.now_ms()
 
     gt = scenario.get("ground_truth", {})
     out.truth = gt.get("truth", "unknown")
@@ -263,8 +342,14 @@ def _render(text: str, scenario: dict, brief=None) -> str:
     return text.replace("{registered_phone}", phone).replace("{problem_line}", problem)
 
 
+def _money(kind: str, amount_paise: int | None) -> str:
+    if amount_paise is None:
+        return f"a {kind} with no figure stated"
+    return f"a {kind} of Rs {amount_paise / 100:.0f}"
+
+
 def _party(persona, scenario, clock, acc, rep, verifier, emit, out, spoken_by_us,
-           ours_spoken, brief=None):
+           ours_spoken, brief=None, mandate=None):
     """A candidate party speaks. Disclosure fires here, before any verdict."""
     acc.phase = LineState.ASSESSING
     truth = persona.get("truth", "bot")
@@ -324,18 +409,66 @@ def _party(persona, scenario, clock, acc, rep, verifier, emit, out, spoken_by_us
         clock.advance(speak_ms + persona.get("gap_ms", 900))
         v = gate(acc, clock.now_ms())
         out.beats.append(Beat(clock.now_ms(), "detector",
-                              f"{v.decision}  score={v.score:+.2f}", v.reason))
+                              f"{v.decision}  score={v.score:+.2f}", v.reason,
+                              families=tuple(f.value for f in v.positive_families)))
         if v.decision == "FETCH" and out.fetched_at_ms is None:
             out.fetched_at_ms = clock.now_ms()
             out.fetch_families = tuple(f.value for f in v.positive_families)
             emit(HumanDetected(t_ms=clock.now_ms(), families=out.fetch_families))
         return True
 
+    def settle(turn) -> None:
+        """Record what was offered and let the FROZEN mandate decide.
+
+        Nothing here decides anything. accept_offer() is a field check against a
+        mandate parsed before the call; this code can only report what it
+        returned. That is the whole point -- a rep can stretch a sentence, and
+        there is no sentence here to stretch.
+
+        Notes are written AS THE OFFER ARRIVES rather than reconstructed at the
+        end, because a refused offer leaves nothing behind to re-parse: the
+        figure that was never authorised is exactly the one a later pass cannot
+        recover.
+        """
+        offer = turn.get("offer")
+        if offer:
+            kind, amt = offer.get("kind", ""), offer.get("amount_paise")
+            said = _money(kind, amt)
+            out.offers.append({"kind": kind, "amount_paise": amt,
+                               "t_ms": clock.now_ms()})
+            out.note(clock.now_ms(), "offer", f"They offered {said}.")
+            # Drives the reducer, which summons the user when the offer falls
+            # outside the grant and nobody is present to widen it.
+            emit(OfferMade(t_ms=clock.now_ms(), offer_kind=kind, amount_paise=amt))
+            try:
+                res = accept_offer(mandate or Mandate.empty(), kind, amt)
+            except MandateError as e:
+                out.escalated.append({"kind": kind, "amount_paise": amt,
+                                      "why": str(e)})
+                out.note(clock.now_ms(), "escalated",
+                         f"Did not accept {said}.", str(e))
+                out.beats.append(Beat(clock.now_ms(), "system",
+                                      f"offer outside the mandate -> asking you",
+                                      str(e)))
+            else:
+                out.accepted = {**res, "t_ms": clock.now_ms()}
+                out.note(clock.now_ms(), "accepted",
+                         f"Accepted {said} on your behalf.",
+                         "inside the authority you gave before the call")
+                out.beats.append(Beat(clock.now_ms(), "system",
+                                      f"accepted {said}", "within mandate"))
+        ref = turn.get("reference")
+        if ref:
+            out.reference_number = str(ref)
+            out.note(clock.now_ms(), "reference", f"Reference number {ref}.")
+
     for turn in persona.get("turns", []):
         text = turn if isinstance(turn, str) else turn["say"]
         speak_ms = 2500 if isinstance(turn, str) else turn.get("speak_ms", 2500)
         if not hear(text, speak_ms, "[human]" if truth == "human" else "[machine]"):
             return
+        if isinstance(turn, dict):
+            settle(turn)
 
         # Nothing to judge and nothing decided: this is the terse case, and the
         # only way forward is to say something and see what comes back.
@@ -357,5 +490,6 @@ def _party(persona, scenario, clock, acc, rep, verifier, emit, out, spoken_by_us
                             after_probe=True):
                     return
 
-    out.disclosed_before_speaking = (
-        not spoken_by_us or spoken_by_us[0] == "disclosure")
+    # NOTE: both disclosure flags are computed in run(), not here. _party has
+    # an early `return False` on a verification request, so anything set at
+    # this point is skipped on exactly the call that hands over fastest.

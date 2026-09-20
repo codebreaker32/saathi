@@ -1,0 +1,31 @@
+# THE SAME CALL, A WORSE OFFER. The bot offers 150 against a 400 floor, so the
+# mandate refuses and the user is summoned.
+#
+# This is the scenario that proves the floor is a FLOOR. Under a cap-shaped
+# bound this call would quietly succeed -- 150 is "under budget" -- which is
+# precisely inverted from what anyone wants when money is offered TO them.
+id: offer_below_mandate
+org: Zomato
+line: "sim://zomato-alt"
+goal: "late order delivery refund"
+ring_ms: 3800
+start: root
+nodes:
+  root:
+    kind: menu
+    prompt: "For orders press 1, for payments press 2, to repeat these options press 9."
+    options: {"1": party, "2": root, "9": root}
+  party:
+    kind: party
+    persona:
+      truth: bot
+      synthesis_score: 0.83
+      judge_binding: specific
+      duplex: yield
+      turns:
+        - {say: "Hi, I'm Ria, Zomato's automated assistant. I can see your recent order.", speak_ms: 4200}
+        - {say: "I can see it arrived late. Let me check what I can do for you.", speak_ms: 3800}
+        - say: "The best I can do is 150 rupees as an apology."
+          speak_ms: 3400
+          offer: {kind: refund, amount_paise: 15000}
+ground_truth: {truth: bot, human_first_word_ms: null}

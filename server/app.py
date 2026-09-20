@@ -15,8 +15,10 @@ from __future__ import annotations
 
 import json
 import sys
+import dataclasses
 import threading
 import time
+import wave
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
@@ -32,6 +34,69 @@ CONTROLS: list[dict] = []
 SESSIONS: dict[str, dict] = {}
 _render_lock = threading.Lock()
 _seq = [0]
+
+
+def _mandate_from(d) -> "Mandate":
+    """Rebuild a Mandate from a request body, through a field whitelist.
+
+    The whitelist stops a client inventing attributes; it does NOT stop the
+    client choosing generous values, because on this single-user local build
+    the client IS the user and the mandate is their own grant to make. On a
+    shared deployment that stops being true and this needs a server-side token
+    issued by /api/mandate -- see AGENTS.md.
+    """
+    from saathi.types import Mandate
+    if not isinstance(d, dict):
+        return Mandate.empty()
+    allowed = {f.name for f in dataclasses.fields(Mandate)}
+    try:
+        return Mandate(**{k: v for k, v in d.items() if k in allowed})
+    except TypeError:
+        return Mandate.empty()
+
+
+def _speech_ms(frames: list[dict]) -> int | None:
+    """How much of the call was actually speech, from the rendered clips.
+
+    Returns None when no audio exists, so the summary says nothing about hold
+    rather than counting speech as waiting.
+    """
+    total, seen = 0.0, 0
+    for f in frames:
+        aid = f.get("audio")
+        if not aid:
+            continue
+        p = AUDIO_DIR / f"{aid}.wav"
+        if not p.exists():
+            continue
+        try:
+            with wave.open(str(p)) as w:
+                total += w.getnframes() / w.getframerate()
+                seen += 1
+        except Exception:
+            continue
+    return int(total * 1000) if seen else None
+
+
+# The live transport, created lazily and only if credentials exist. Absent
+# credentials this stays None and the webhook answers with empty TwiML, which
+# is what an unconfigured box should do: nothing, loudly enough to notice.
+_TRANSPORT = [None]
+
+
+def _twilio_webhook(path: str, form: dict) -> str:
+    from saathi.transport import twiml as T
+    from saathi.transport.twilio_transport import TwilioConfig, TwilioTransport
+    if _TRANSPORT[0] is None:
+        if not TwilioConfig.available():
+            print(f"  [twilio] {path} ignored: not configured", file=sys.stderr)
+            return T.document()
+        _TRANSPORT[0] = TwilioTransport(TwilioConfig.from_env())
+    try:
+        return _TRANSPORT[0].on_webhook(path, form)
+    except Exception as e:                      # never 500 at a carrier
+        print(f"  [twilio] {path}: {e}", file=sys.stderr)
+        return T.document()
 
 
 def prerender(frames: list[dict], profile: str | None = None) -> dict:
@@ -63,10 +128,20 @@ def _scenarios_for(line: str) -> list[dict]:
     picks up is the whole variable under test -- a warm undisclosed bot and a
     real rep answer the same number, and choosing between them is the demo.
     """
+    out = _by_line(line)
+    if out:
+        return out
+    # An unknown company has no scenarios of its own. Offering every
+    # counterparty we can simulate is more useful than an empty list, and the
+    # UI says which line each one belongs to.
+    return _by_line(None)
+
+
+def _by_line(line: str | None) -> list[dict]:
     out = []
     for p in sorted(SCENARIO_DIR.glob("*.yaml")):
         sc = load(p.stem)
-        if sc.get("line") != line:
+        if line is not None and sc.get("line") != line:
             continue
         out.append({"id": p.stem,
                     "truth": sc.get("ground_truth", {}).get("truth"),
@@ -106,6 +181,20 @@ class Handler(BaseHTTPRequestHandler):
                 })
             return self._json(items)
 
+        if u.path == "/api/telephony":
+            # The UI must be able to say truthfully whether a number will be
+            # dialled or simulated. Guessing here is how a demo ends up implying
+            # it placed a call it never placed.
+            from saathi.transport.twilio_transport import TwilioConfig
+            live = TwilioConfig.available()
+            return self._json({
+                "live": live,
+                "from_number": (TwilioConfig.from_env().from_number if live else None),
+                "why": ("ready to dial" if live else
+                        "no Twilio credentials, so a number here is recorded but "
+                        "the call runs against the simulated line"),
+            })
+
         if u.path.startswith("/api/audio/"):
             return self._wav(AUDIO_DIR / Path(u.path).name)
 
@@ -121,6 +210,49 @@ class Handler(BaseHTTPRequestHandler):
     def do_POST(self):
         u = urlparse(self.path)
 
+        # Twilio posts here at every decision point on a live call. Kept on the
+        # stdlib server rather than pulling in a framework: the whole surface is
+        # form-encoded in and TwiML out.
+        #
+        # NOTE: Twilio cannot reach localhost. SAATHI_PUBLIC_URL has to be a
+        # tunnel (ngrok, Cloudflare) or a deployed box, or none of this fires.
+        if u.path.startswith("/twilio/"):
+            n = int(self.headers.get("Content-Length", 0))
+            raw = self.rfile.read(n).decode("utf-8", "replace") if n else ""
+            form = {k: v[0] for k, v in parse_qs(raw).items()}
+            body = _twilio_webhook(u.path, form).encode("utf-8")
+            self.send_response(200)
+            self.send_header("Content-Type", "text/xml; charset=utf-8")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+            return
+
+        if u.path == "/api/testcall":
+            # The smallest honest thing a number field can do today: place a
+            # real call, announce what Saathi is, and hang up. It does NOT run
+            # the detector -- driving a live call through run() is the Phase 0
+            # transport refactor and is not done. Saying "test call" rather than
+            # "call" is the difference between a demo and a lie.
+            n = int(self.headers.get("Content-Length", 0))
+            body = json.loads(self.rfile.read(n) or b"{}")
+            to = (body.get("to_number") or "").strip()
+            from saathi.transport.twilio_transport import (
+                TwilioConfig, TwilioNotConfigured, TwilioTransport)
+            if not to:
+                return self._json({"placed": False, "why": "no number given"})
+            try:
+                cfg = TwilioConfig.from_env()
+            except TwilioNotConfigured as e:
+                return self._json({"placed": False, "why": str(e)})
+            try:
+                t = TwilioTransport(cfg)
+                sid = t.dial(to, session_id="testcall")
+                return self._json({"placed": True, "sid": sid,
+                                   "why": f"dialling {to} from {cfg.from_number}"})
+            except Exception as e:
+                return self._json({"placed": False, "why": f"{type(e).__name__}: {e}"})
+
         if u.path == "/api/call":
             n = int(self.headers.get("Content-Length", 0))
             body = json.loads(self.rfile.read(n) or b"{}")
@@ -133,6 +265,7 @@ class Handler(BaseHTTPRequestHandler):
                 "facts": body.get("facts") or {},
                 "playbook": body.get("playbook"),
                 "mandate": body.get("mandate") or {},
+                "to_number": (body.get("to_number") or "").strip(),
             }
             return self._json({"session": sid})
 
@@ -246,9 +379,14 @@ class Handler(BaseHTTPRequestHandler):
         except Exception:
             store = None
 
-        out = run(sc, sc.get("goal", ""), brief=brief, store=store)
+        out = run(sc, sc.get("goal", ""), brief=brief, store=store,
+                  mandate=_mandate_from(sess.get("mandate")))
         frames = build(out, sc, speed=speed)
         stats = prerender(frames)
+        # Rebuilt once the clips exist, so the summary can report hold time from
+        # measured audio instead of guessing. build() is pure and cheap; run()
+        # is not re-run, so the timeline is identical.
+        frames = build(out, sc, speed=speed, speech_ms=_speech_ms(frames))
         print(f"  [voice] {name}: {stats}", file=sys.stderr)
 
         self.send_response(200)

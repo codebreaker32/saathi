@@ -1,0 +1,41 @@
+# THE CALL SAATHI FINISHES ALONE. A disclosed self-service bot resolves the
+# problem inside the authority the user granted before the call, so the user is
+# never pulled in at all.
+#
+# DESIGN.md names this column -- "status queries, chasing a ticket, taking a
+# reference number, accepting inside the mandate" -- and until now no scenario
+# exercised it. The detector must NOT fetch here: it is a machine, it says so,
+# and nothing about resolving the problem changes that.
+id: bot_settles_refund
+org: Zomato
+line: "sim://zomato"
+goal: "late order delivery refund"
+ring_ms: 3800
+start: root
+nodes:
+  root:
+    kind: menu
+    prompt: "For orders press 1, for payments press 2, to repeat these options press 9."
+    options: {"1": party, "2": root, "9": root}
+  party:
+    kind: party
+    persona:
+      truth: bot
+      synthesis_score: 0.81
+      judge_binding: specific
+      duplex: yield
+      turns:
+        - {say: "Hi, I'm Ria, Zomato's automated assistant. I can see your recent order.", speak_ms: 4200}
+        - {say: "That order was delivered well outside the promised window. I'm sorry about that.", speak_ms: 4000}
+        # The offer clears the Rs 400 floor, so the mandate permits it and the
+        # user is never summoned.
+        - say: "I can refund you 450 rupees to your original payment method."
+          speak_ms: 3600
+          offer: {kind: refund, amount_paise: 45000}
+        # NOTE: no spoken digit run here, deliberately. A bot reading out
+        # "reference 8842213" trips the digit backstop and hands the call over
+        # -- correctly, since nothing can tell that from "read me the code we
+        # sent you". Saathi therefore cannot take down a spoken reference
+        # number without fetching the user; see DESIGN.md, Where this loses.
+        - {say: "That's processed. You'll see it back on your card in three to five working days.", speak_ms: 4200}
+ground_truth: {truth: bot, human_first_word_ms: null}
