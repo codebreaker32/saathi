@@ -150,6 +150,38 @@ export default function Page() {
     } finally { setBusy(false); }
   }
 
+  /* Hang up. The timeline is computed before the stream opens, so ending the
+     call stops the playback and summarises WHAT WAS HEARD SO FAR -- it cannot
+     reach back and stop a line that has already been spoken. The summary is
+     built from the frames that actually arrived, so it never reports anything
+     the user did not see happen. */
+  const endCall = useCallback(() => {
+    es.current?.close();
+    audio.current?.pause();
+    muted.current = true;
+    queue.current = [];
+    setPhase("You ended the call");
+    setEnded(prev => prev ?? ({
+      type: "ended",
+      conclusion: {
+        ended: true,
+        ended_label: "You ended the call",
+        ended_detail: "Saathi hung up when you asked. Everything below is what "
+          + "had happened up to that moment.",
+        offer_made: false, accepted: false, escalated: false,
+        settlement_is_simulated: true,
+        not_confirmed: [
+          "The line is simulated. Nothing here contacted a real company.",
+          "You ended this call early, so anything still in progress did not finish.",
+        ],
+      },
+      timing: {}, next_actions: [
+        { id: "retry", label: "Try again", detail: "Place the call again from the start." },
+      ], notes: [],
+    } as unknown as Frame));
+    setStage("summary");
+  }, []);
+
   async function placeCall() {
     es.current?.close();
     setFrames([]); setDet(null); setEnded(null); setSummoned(false);
@@ -190,6 +222,11 @@ export default function Page() {
         setStage("summary"); src.close();
       }
       if (f.audio) say(f.audio);
+      /* audio_missing means the server had no recording for this line -- a
+         content-hashed clip for a problem the user typed themselves, which no
+         cache can contain and the deployed host cannot render. The line still
+         shows; it just has no sound, and the transcript says so rather than
+         leaving a silent gap that looks like a fault. */
     };
     src.onerror = () => src.close();
   }
@@ -506,6 +543,13 @@ export default function Page() {
                 disabled={!summoned} onClick={() => control("take_over")} />
               <Ctl label="That isn't a person" hint="put me back on hold" danger
                 disabled={!summoned} onClick={() => control("not_a_person")} />
+            </div>
+            {/* Hanging up is available at ANY time, not only after a summon.
+                The other four controls need a person on the line to mean
+                anything; wanting out does not. */}
+            <div className="flex items-center justify-center mt-3">
+              <Ctl label="End the call" hint="hang up and summarise" danger
+                onClick={endCall} />
             </div>
           </div>
         </>

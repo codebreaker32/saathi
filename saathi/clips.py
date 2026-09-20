@@ -20,6 +20,21 @@ VERIFY_HANDOFF = (
 """Spoken once on a verification request, then the floor is gone. True by
 construction: the credential was never loaded."""
 
+STATE_DEMAND = (
+    "My user isn't picking up, so let me tell you what they authorised. "
+    "They will {demand}. Can you do that?"
+)
+"""Said when the summon goes unanswered and the user DID grant authority.
+
+`{demand}` is filled from mandate.render(), which reads the FROZEN FIELDS and
+nothing else. That is what keeps this a fixed clip rather than model output: the
+sentence the user typed does not travel with the session, so there is no wording
+here for a rep to argue with -- only the numbers they already agreed to.
+
+Never spoken if the user joined. The reducer gates it on presence still being
+SUMMONING, so a takeover a moment earlier silences it by construction.
+"""
+
 CALLBACK_REQUEST = (
     "My user isn't available right now. Rather than take up your time -- can I "
     "take a reference number, and have them call back?"

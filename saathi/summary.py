@@ -109,6 +109,10 @@ def conclude(outcome) -> dict:
         "ended": ended,
         "ended_label": (
             "Call ended" if ended
+            # Being rung and not answering is a DIFFERENT ending from taking
+            # the call, and the summary is the only place the user finds out
+            # which one happened to them.
+            else "You didn't pick up" if getattr(outcome, "summon_unanswered", False)
             else "Handed to you" if outcome.fetched_at_ms is not None
             else "The transcript stops here"
         ),
@@ -127,6 +131,8 @@ def conclude(outcome) -> dict:
         "escalated_why": outcome.escalated[0]["why"] if outcome.escalated else "",
         "reference_number": outcome.reference_number,
         "settled_alone": outcome.settled_alone,
+        "summon_unanswered": getattr(outcome, "summon_unanswered", False),
+        "callback_requested": getattr(outcome, "callback_requested", False),
         "handed_over": outcome.handed_off_at_ms is not None,
         "fetched": outcome.fetched_at_ms is not None,
         # Unconditional. Not a branch, not a flag anyone can turn off.
@@ -175,13 +181,34 @@ def next_actions(outcome) -> list[dict]:
                    "You were never needed.",
         ))
 
-    if outcome.fetched_at_ms is not None:
+    unanswered = getattr(outcome, "summon_unanswered", False)
+
+    if unanswered:
+        # A fetch means SUMMONED, not answered. Reporting "you took the call" to
+        # someone who never picked it up would be the summary telling them their
+        # own history wrong.
+        acts.append(NextAction(
+            id="missed_it",
+            label="You missed this one",
+            detail="Saathi found a person, rang you, and carried on when you did not "
+                   "answer. Everything below is what happened while you were away.",
+        ))
+    elif outcome.fetched_at_ms is not None:
         acts.append(NextAction(
             id="took_over",
             label="You took the call",
             detail="Saathi found a person and handed the line to you. Anything agreed "
                    "after that point was agreed by you, so there is nothing here for "
                    "Saathi to report or to act on.",
+        ))
+
+    if outcome.callback_requested and not outcome.accepted:
+        acts.append(NextAction(
+            id="await_callback",
+            label="Wait for their callback",
+            detail="They said they would log it and call back. Saathi cannot confirm "
+                   "they will, and there is no reference number to hold them to it, "
+                   "so give it a day and call again if nothing arrives.",
         ))
 
     if outcome.handed_off_at_ms is not None and not outcome.offers:

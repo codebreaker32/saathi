@@ -26,6 +26,13 @@ nodes:
         - {say: "Billing.", speak_ms: 700}
         - {say: "Yeah?", speak_ms: 500}
         - {say: "Billing, yeah. Go on.", speak_ms: 1400}
+      # The other ending: nobody on the line can authorise anything, so the
+      # only honest outcome is that it gets logged and somebody calls back.
+      after_demand:
+        - {say: "I can't authorise a refund from this desk, I'm afraid.", speak_ms: 3200}
+        - say: "What I can do is log it and get the billing team to call your user back."
+          speak_ms: 4400
+          callback: true
 ground_truth:
   truth: human
   human_first_word_ms: 431600

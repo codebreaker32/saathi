@@ -35,6 +35,15 @@ nodes:
         - {say: "Zomato support, this is Priya, how can I help?", speak_ms: 2600}
         - {say: "Right, order 4471 -- sorry, let me just pull that up. Two hours, you said?", speak_ms: 4200}
         - {say: "Yeah I can see it, that's well outside the window. I can sort something out for you.", speak_ms: 4600}
+      # Spoken only if the user never picks up. Saathi states the authorised
+      # demand, and this is the agent answering it -- the half of the call the
+      # user was not there to hear, which is why the summary exists.
+      after_demand:
+        - {say: "Right, understood. Let me see what I'm allowed to put through.", speak_ms: 3600}
+        - say: "I can refund you 450 rupees for the delay. Does that work?"
+          speak_ms: 3800
+          offer: {kind: refund, amount_paise: 45000}
+        - {say: "Lovely, that's gone through. It'll be back on the card in a few days.", speak_ms: 4200}
 ground_truth:
   truth: human
   human_first_word_ms: 678600

@@ -114,12 +114,22 @@ def annotate_audio_ms(frames: list[dict]) -> list[dict]:
             continue
         p = AUDIO_DIR / f"{aid}.wav"
         if not p.exists():
+            # DROP the reference rather than advertise a clip we cannot serve.
+            # Clip ids are content-hashed, so a user-typed problem produces a
+            # disclosure line no cache can already contain, and the deployed
+            # host has no Polly credentials to render one (instance profiles are
+            # denied on this account). Leaving the id in place made the browser
+            # fetch it and log `GET /api/audio/....wav 404`, which reads as a
+            # broken deployment rather than as a line with no recording.
+            f.pop("audio", None)
+            f["audio_missing"] = True
             continue
         try:
             with wave.open(str(p)) as w:
                 f["audio_ms"] = int(w.getnframes() / w.getframerate() * 1000)
         except Exception:
-            continue
+            f.pop("audio", None)
+            f["audio_missing"] = True
     return frames
 
 

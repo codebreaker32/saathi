@@ -31,9 +31,10 @@ from saathi.session.machine import step
 from saathi.session.states import SessionState
 from saathi.mandate import MandateError, accept_offer
 from saathi.types import (
-    Answered, Dialed, Family, HoldMusicDetected, HumanDetected, LineState,
-    Mandate, MenuDetected, OfferMade, RemoteUtterance, Ringing,
-    SignalObservation, Speak, SummonUser, VerifyAsk,
+    Answered, CaptureCallback, Dialed, Family, HoldMusicDetected, HumanDetected,
+    LineState, Mandate, MenuDetected, OfferMade, RemoteUtterance, Ringing,
+    SignalObservation, Speak, StopSpeaking, SummonTimeout, SummonUser,
+    UserPresence, VerifyAsk,
 )
 from saathi.verification import VerificationDetector
 
@@ -111,6 +112,8 @@ class Outcome:
     accepted: dict | None = None
     escalated: list[dict] = field(default_factory=list)
     reference_number: str | None = None
+    callback_requested: bool = False
+    summon_unanswered: bool = False
     probes_used: int = 0
 
     def note(self, t_ms: int, kind: str, text: str, detail: str = "") -> None:
@@ -200,6 +203,9 @@ def run(scenario: dict, goal: str, *, brief=None, verifier=None, store=None,
             re.findall(r"\d{4,8}", _render(clips.DISCLOSURE, scenario, brief)))
     seen_prompts: dict[str, int] = {}
 
+    def presence():
+        return state.presence
+
     def emit(event):
         nonlocal state
         state, cmds = step(state, event)
@@ -212,6 +218,17 @@ def run(scenario: dict, goal: str, *, brief=None, verifier=None, store=None,
             elif isinstance(c, SummonUser):
                 out.beats.append(Beat(clock.now_ms(), "system",
                                       f"summoning the user ({c.urgency})"))
+            elif isinstance(c, StopSpeaking):
+                # Was silently dropped. A safety stop that never reaches the
+                # transport is not a safety stop.
+                out.beats.append(Beat(clock.now_ms(), "system",
+                                      "stops speaking mid-word"))
+            elif isinstance(c, CaptureCallback):
+                out.callback_requested = True
+                out.note(clock.now_ms(), "callback",
+                         "Asked them to register the problem and call back.")
+                out.beats.append(Beat(clock.now_ms(), "system",
+                                      "asked for a callback"))
         return cmds
 
     emit(Dialed(t_ms=clock.now_ms()))
@@ -298,7 +315,8 @@ def run(scenario: dict, goal: str, *, brief=None, verifier=None, store=None,
             # just arrived -- the failure the old design actually had.
             acc = EpochAccumulator(phase=LineState.ASSESSING)
             _party(node["persona"], scenario, clock, acc, rep, verifier,
-                   emit, out, spoken_by_us, ours_spoken, brief, mandate)
+                   emit, out, spoken_by_us, ours_spoken, brief, mandate,
+                   presence)
             node_id = None
         else:
             node_id = None
@@ -354,8 +372,15 @@ def _money(kind: str, amount_paise: int | None) -> str:
     return f"a {kind} of Rs {amount_paise / 100:.0f}"
 
 
+# How long the user's phone rings before Saathi carries on alone. Long enough
+# that someone reaching for a handset is not cut off, short enough that a real
+# agent is not left listening to silence -- DESIGN.md is explicit that leaving a
+# rep in silence is how you lose the call.
+SUMMON_RING_MS = 20_000
+
+
 def _party(persona, scenario, clock, acc, rep, verifier, emit, out, spoken_by_us,
-           ours_spoken, brief=None, mandate=None):
+           ours_spoken, brief=None, mandate=None, presence=None):
     """A candidate party speaks. Disclosure fires here, before any verdict."""
     acc.phase = LineState.ASSESSING
     truth = persona.get("truth", "bot")
@@ -463,6 +488,14 @@ def _party(persona, scenario, clock, acc, rep, verifier, emit, out, spoken_by_us
                          "inside the authority you gave before the call")
                 out.beats.append(Beat(clock.now_ms(), "system",
                                       f"accepted {said}", "within mandate"))
+        if turn.get("callback"):
+            # The AGENT offered to call back. Distinct from Saathi asking for
+            # one: this is a commitment they made, and the summary has to
+            # attribute it to them rather than to us.
+            out.callback_requested = True
+            out.note(clock.now_ms(), "callback",
+                     "They said they would log it and call you back.",
+                     "their commitment, not something Saathi can confirm")
         ref = turn.get("reference")
         if ref:
             out.reference_number = str(ref)
@@ -495,6 +528,26 @@ def _party(persona, scenario, clock, acc, rep, verifier, emit, out, spoken_by_us
                 if not hear(r_text, r_ms, "[reply to probe]",
                             after_probe=True):
                     return
+
+    # The user was rung and never picked up. Saathi carries on alone: it states
+    # what was authorised, the agent answers, and whatever they say is recorded.
+    # The reducer decides whether anything is said at all -- it refuses once the
+    # user has joined -- so this only feeds it the timeout.
+    if presence is not None and presence() is UserPresence.SUMMONING:
+        clock.advance(SUMMON_RING_MS)
+        out.summon_unanswered = True
+        out.note(clock.now_ms(), "milestone",
+                 "You did not pick up, so Saathi carried on without you.")
+        emit(SummonTimeout(t_ms=clock.now_ms()))
+        clock.advance(4200)                      # the demand takes a moment to say
+
+        for turn in persona.get("after_demand", []):
+            text = turn if isinstance(turn, str) else turn["say"]
+            speak_ms = 3000 if isinstance(turn, str) else turn.get("speak_ms", 3000)
+            if not hear(text, speak_ms, "[human]" if truth == "human" else "[machine]"):
+                return
+            if isinstance(turn, dict):
+                settle(turn)
 
     # NOTE: both disclosure flags are computed in run(), not here. _party has
     # an early `return False` on a verification request, so anything set at

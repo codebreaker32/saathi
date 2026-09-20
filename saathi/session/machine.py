@@ -214,15 +214,35 @@ def _transfer(s: SessionState, e: TransferSignature):
 
 
 def _summon_timeout(s: SessionState, e: SummonTimeout):
+    """The user was rung and did not answer.
+
+    THE GUARD ON THE FIRST LINE IS THE WHOLE FEATURE. If the user joined while
+    it was ringing, presence is no longer SUMMONING and this returns nothing --
+    so "my user isn't picking up" can never be said to an agent who is already
+    talking to that user. A takeover a fraction of a second earlier silences it
+    by construction rather than by timing.
+
+    With authority granted, say what it is: the numbers come from the FROZEN
+    mandate, so the rep hears exactly what was authorised and learns that
+    lowballing returns to the user. With no authority, there is nothing to
+    negotiate and the only honest move is to ask for a callback.
+    """
     if s.presence is not UserPresence.SUMMONING:
         return s, []
     s = replace(s, presence=UserPresence.UNREACHABLE)
-    if s.line is LineState.ENGAGED:
-        return s, [
-            Speak(text=clips.CALLBACK_REQUEST, purpose="explain"),
-            CaptureCallback(),
-        ]
-    return s, []
+    if s.line is not LineState.ENGAGED:
+        return s, []
+
+    from saathi.mandate import render
+    if s.mandate is not None and not s.mandate.is_empty():
+        # There is something to negotiate, so state it and wait for an answer.
+        # Asking for a callback HERE would be wrong: it concedes before the
+        # agent has said anything, and the summary would claim a callback was
+        # requested when what actually happened was a demand.
+        return s, [Speak(text=clips.STATE_DEMAND.format(demand=render(s.mandate)),
+                         purpose="explain")]
+    return s, [Speak(text=clips.CALLBACK_REQUEST, purpose="explain"),
+               CaptureCallback()]
 
 
 def _remote_hungup(s: SessionState, e: RemoteHungUp):
