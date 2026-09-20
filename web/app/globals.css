@@ -1,88 +1,101 @@
 @import "tailwindcss";
 
-/* A calmer, warmer dark than the terminal look this replaces. Blue-tinted
-   near-black, translucent cards, soft borders -- the register of something you
-   trust with a phone call rather than something you monitor. */
+/* FreeScout's register: a dark slate rail against near-white content, one blue
+   accent. It reads as something you work in all day rather than something you
+   watch once -- which is the right frame, because a call companion is a list of
+   ongoing things, not a single event. */
 :root {
-  --background:  oklch(0.13 0.018 258);
-  --surface:     oklch(0.18 0.022 258 / 82%);
-  --surface-2:   oklch(0.21 0.020 258);
-  --elevated:    oklch(0.23 0.025 257);
-  --foreground:  oklch(0.96 0.008 255);
-  --muted:       oklch(0.72 0.020 258);
-  --faint:       oklch(0.55 0.020 258);
-  --primary:     oklch(0.70 0.150 250);
-  --primary-ink: oklch(0.15 0.020 258);
-  --success:     oklch(0.75 0.170 150);
-  --warning:     oklch(0.83 0.160 85);
-  --destructive: oklch(0.63 0.180 25);
-  --border:      oklch(0.35 0.025 257 / 62%);
-  --radius: 14px;
+  --rail:       #2a3b47;
+  --rail-dark:  #253540;
+  --rail-hover: #344856;
+  --rail-text:  #a5b2bd;
+  --page:       #f4f5f5;
+  --panel:      #ffffff;
+  --line:       #e3e8eb;
+  --line-soft:  #f0f2f4;
+  --ink:        #2a3b47;
+  --ink-soft:   #72808e;
+  --ink-faint:  #93a1af;
+  --accent:     #3197d6;
+  --accent-ink: #0078d7;
+  --green:      #22a06b;
+  --amber:      #d99400;
+  --red:        #d0453b;
 }
 
 html, body {
-  margin: 0;
-  background:
-    radial-gradient(900px 500px at 12% -10%, oklch(0.24 0.06 258 / 55%), transparent 60%),
-    radial-gradient(700px 420px at 92% 0%, oklch(0.22 0.05 292 / 42%), transparent 62%),
-    var(--background);
-  background-attachment: fixed;
-  color: var(--foreground);
-  font-family: Manrope, ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
-  -webkit-font-smoothing: antialiased;
+  margin: 0; background: var(--page); color: var(--ink);
+  font-family: -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  font-size: 14px; line-height: 1.45; -webkit-font-smoothing: antialiased;
 }
+* { box-sizing: border-box; }
 
-.card {
-  background: var(--surface);
-  border: 1px solid var(--border);
-  border-radius: var(--radius);
-  backdrop-filter: blur(14px);
+.rail { background: var(--rail); color: var(--rail-text); }
+.rail a, .rail button { color: var(--rail-text); }
+.folder {
+  display: flex; align-items: center; gap: 10px; width: 100%;
+  padding: 9px 16px; border: 0; background: transparent; cursor: pointer;
+  font-size: 13px; text-align: left; border-left: 3px solid transparent;
 }
-.eyebrow {
-  font-size: 11px; letter-spacing: .14em; text-transform: uppercase;
-  color: var(--faint); font-weight: 600;
+.folder:hover { background: var(--rail-hover); }
+.folder.on { background: var(--rail-dark); color: #fff; border-left-color: var(--accent); }
+.folder .n { margin-left: auto; font-size: 11px; opacity: .65; }
+
+.panel { background: var(--panel); border: 1px solid var(--line); border-radius: 4px; }
+
+.row {
+  display: block; width: 100%; text-align: left; cursor: pointer;
+  padding: 12px 16px; border: 0; border-bottom: 1px solid var(--line-soft);
+  background: var(--panel); border-left: 3px solid transparent;
 }
-.mono { font-variant-numeric: tabular-nums;
-        font-family: ui-monospace, "SF Mono", Menlo, monospace; }
+.row:hover { background: #fbfcfc; }
+.row.on { background: #f2f8fd; border-left-color: var(--accent); }
+
+.pill {
+  display: inline-flex; align-items: center; gap: 5px;
+  font-size: 11px; font-weight: 600; padding: 2px 8px; border-radius: 10px;
+  border: 1px solid var(--line); color: var(--ink-soft); background: #fff;
+}
+.pill.live  { color: var(--accent); border-color: #bcdcf3; background: #f2f8fd; }
+.pill.you   { color: var(--red);    border-color: #f2cdca; background: #fdf4f3; }
+.pill.done  { color: var(--green);  border-color: #c5e6d7; background: #f3fbf7; }
+.pill.held  { color: var(--ink-soft); }
+.dot { width: 6px; height: 6px; border-radius: 99px; background: currentColor; }
 
 .btn {
-  border: 1px solid var(--border); background: var(--elevated);
-  color: var(--foreground); border-radius: 999px; padding: 10px 18px;
-  font-weight: 600; font-size: 14px; cursor: pointer;
-  transition: transform .08s, background .15s, opacity .15s;
+  border: 1px solid var(--line); background: #fff; color: var(--ink);
+  border-radius: 4px; padding: 7px 14px; font-size: 13px; font-weight: 600;
+  cursor: pointer;
 }
-.btn:hover:not(:disabled) { background: oklch(0.27 0.03 257); }
-.btn:active:not(:disabled) { transform: scale(.97); }
-.btn:disabled { opacity: .35; cursor: not-allowed; }
-.btn.primary { background: var(--primary); color: var(--primary-ink); border-color: transparent; }
-.btn.danger  { background: var(--destructive); color: #fff; border-color: transparent; }
-.btn.ghost   { background: transparent; }
+.btn:hover:not(:disabled) { background: var(--line-soft); }
+.btn:disabled { opacity: .45; cursor: not-allowed; }
+.btn.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+.btn.primary:hover:not(:disabled) { background: var(--accent-ink); }
+.btn.danger  { background: #fff; border-color: #e3bbb7; color: var(--red); }
 
 textarea, input, select {
-  background: oklch(0.16 0.02 258); color: var(--foreground);
-  border: 1px solid var(--border); border-radius: 12px;
-  padding: 14px 16px; font: inherit; width: 100%; outline: none; resize: none;
+  width: 100%; font: inherit; color: var(--ink); background: #fff;
+  border: 1px solid #ccd4da; border-radius: 4px; padding: 9px 11px; outline: none;
+  resize: vertical;
 }
-textarea:focus, input:focus, select:focus { border-color: var(--primary); }
-
-/* the listening ring on the call screen */
-.viz { position: relative; width: 132px; height: 132px; display: grid; place-items: center; }
-.viz i {
-  position: absolute; inset: 0; border-radius: 999px;
-  border: 1px solid var(--primary); opacity: 0;
-  animation: ring 2.6s cubic-bezier(.2,.7,.3,1) infinite;
+textarea:focus, input:focus, select:focus {
+  border-color: var(--accent); box-shadow: 0 0 0 3px #3197d622;
 }
-.viz i:nth-child(2) { animation-delay: .85s }
-.viz i:nth-child(3) { animation-delay: 1.7s }
-@keyframes ring { 0% { transform: scale(.55); opacity: .55 } 100% { transform: scale(1.25); opacity: 0 } }
 
-.bar { height: 5px; border-radius: 3px; background: oklch(0.26 0.02 258); overflow: hidden; }
-.bar > i { display: block; height: 100%; border-radius: 3px; transition: width .4s ease; }
+/* a thread entry, the way a help desk shows one */
+.thread { border-bottom: 1px solid var(--line-soft); padding: 14px 18px; }
+.thread.us { background: #fbfcfd; }
+.who { font-weight: 700; font-size: 13px; }
+.meta { font-size: 11px; color: var(--ink-faint); }
 
-@keyframes rise { from { opacity: 0; transform: translateY(8px) } to { opacity: 1; transform: none } }
-.rise { animation: rise .22s ease-out both; }
-@keyframes breathe { 0%,100% { opacity: 1 } 50% { opacity: .45 } }
-.breathe { animation: breathe 2s ease-in-out infinite; }
+.bar { height: 4px; border-radius: 2px; background: var(--line); overflow: hidden; }
+.bar > i { display: block; height: 100%; border-radius: 2px; transition: width .35s ease; }
+.mono { font-variant-numeric: tabular-nums; font-family: ui-monospace, Menlo, monospace; }
 
-::-webkit-scrollbar { width: 8px }
-::-webkit-scrollbar-thumb { background: var(--elevated); border-radius: 4px }
+@keyframes rise { from { opacity: 0; transform: translateY(5px) } to { opacity: 1; transform: none } }
+.rise { animation: rise .16s ease-out both; }
+@keyframes breathe { 0%,100% { opacity: 1 } 50% { opacity: .4 } }
+.breathe { animation: breathe 1.8s ease-in-out infinite; }
+
+::-webkit-scrollbar { width: 9px }
+::-webkit-scrollbar-thumb { background: #cdd5da; border-radius: 5px }
