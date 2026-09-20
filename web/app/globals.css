@@ -1,62 +1,88 @@
 @import "tailwindcss";
 
-/* Palette lifted from Jitsi's token set -- near-black page, layered surfaces,
-   one bright success and one bright warning. It suits a call view because the
-   content is text and state, and everything that matters can be a colour
-   against near-black. */
+/* A calmer, warmer dark than the terminal look this replaces. Blue-tinted
+   near-black, translucent cards, soft borders -- the register of something you
+   trust with a phone call rather than something you monitor. */
 :root {
-  --surface-01: #040404;
-  --surface-02: #141414;
-  --surface-03: #292929;
-  --surface-05: #525252;
-  --surface-08: #a3a3a3;
-  --success:    #1ec26a;
-  --warning:    #ffd600;
-  --danger:     #e04a3f;
-  --accept:     #6a50d3;
-  --text-01:    #ffffff;
-  --text-02:    #a3a3a3;
-  --text-03:    #6b6b6b;
-  /* Jitsi's 4px spacing scale */
-  --s1: 4px; --s2: 8px; --s3: 16px; --s4: 24px; --s5: 32px;
+  --background:  oklch(0.13 0.018 258);
+  --surface:     oklch(0.18 0.022 258 / 82%);
+  --surface-2:   oklch(0.21 0.020 258);
+  --elevated:    oklch(0.23 0.025 257);
+  --foreground:  oklch(0.96 0.008 255);
+  --muted:       oklch(0.72 0.020 258);
+  --faint:       oklch(0.55 0.020 258);
+  --primary:     oklch(0.70 0.150 250);
+  --primary-ink: oklch(0.15 0.020 258);
+  --success:     oklch(0.75 0.170 150);
+  --warning:     oklch(0.83 0.160 85);
+  --destructive: oklch(0.63 0.180 25);
+  --border:      oklch(0.35 0.025 257 / 62%);
+  --radius: 14px;
 }
 
 html, body {
-  background: var(--surface-01);
-  color: var(--text-01);
-  font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
-  font-size: 0.875rem;
-  line-height: 1.25rem;
   margin: 0;
+  background:
+    radial-gradient(900px 500px at 12% -10%, oklch(0.24 0.06 258 / 55%), transparent 60%),
+    radial-gradient(700px 420px at 92% 0%, oklch(0.22 0.05 292 / 42%), transparent 62%),
+    var(--background);
+  background-attachment: fixed;
+  color: var(--foreground);
+  font-family: Manrope, ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
   -webkit-font-smoothing: antialiased;
 }
 
-.surface  { background: var(--surface-02); }
-.surface3 { background: var(--surface-03); }
-.mono     { font-variant-numeric: tabular-nums;
-            font-family: ui-monospace, "SF Mono", Menlo, monospace; }
-
-/* Jitsi's toolbar button: circular, flat, colour carries the meaning */
-.tbtn {
-  width: 48px; height: 48px; border-radius: 9999px;
-  display: grid; place-items: center;
-  background: var(--surface-03); color: var(--text-01);
-  border: none; cursor: pointer; transition: background .12s, transform .08s;
+.card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  backdrop-filter: blur(14px);
 }
-.tbtn:hover:not(:disabled) { background: var(--surface-05); }
-.tbtn:active:not(:disabled) { transform: scale(.94); }
-.tbtn:disabled { opacity: .3; cursor: not-allowed; }
-.tbtn.danger { background: var(--danger); }
-.tbtn.on     { background: var(--accept); }
+.eyebrow {
+  font-size: 11px; letter-spacing: .14em; text-transform: uppercase;
+  color: var(--faint); font-weight: 600;
+}
+.mono { font-variant-numeric: tabular-nums;
+        font-family: ui-monospace, "SF Mono", Menlo, monospace; }
 
-@keyframes pulse { 0%,100% { opacity: 1 } 50% { opacity: .35 } }
-.pulse { animation: pulse 1.4s ease-in-out infinite; }
+.btn {
+  border: 1px solid var(--border); background: var(--elevated);
+  color: var(--foreground); border-radius: 999px; padding: 10px 18px;
+  font-weight: 600; font-size: 14px; cursor: pointer;
+  transition: transform .08s, background .15s, opacity .15s;
+}
+.btn:hover:not(:disabled) { background: oklch(0.27 0.03 257); }
+.btn:active:not(:disabled) { transform: scale(.97); }
+.btn:disabled { opacity: .35; cursor: not-allowed; }
+.btn.primary { background: var(--primary); color: var(--primary-ink); border-color: transparent; }
+.btn.danger  { background: var(--destructive); color: #fff; border-color: transparent; }
+.btn.ghost   { background: transparent; }
 
-@keyframes slidein { from { opacity: 0; transform: translateY(6px) } to { opacity: 1; transform: none } }
-.slidein { animation: slidein .18s ease-out; }
+textarea, input, select {
+  background: oklch(0.16 0.02 258); color: var(--foreground);
+  border: 1px solid var(--border); border-radius: 12px;
+  padding: 14px 16px; font: inherit; width: 100%; outline: none; resize: none;
+}
+textarea:focus, input:focus, select:focus { border-color: var(--primary); }
 
-.bar { height: 4px; border-radius: 2px; background: var(--surface-03); overflow: hidden; }
-.bar > i { display: block; height: 100%; border-radius: 2px; transition: width .35s ease; }
+/* the listening ring on the call screen */
+.viz { position: relative; width: 132px; height: 132px; display: grid; place-items: center; }
+.viz i {
+  position: absolute; inset: 0; border-radius: 999px;
+  border: 1px solid var(--primary); opacity: 0;
+  animation: ring 2.6s cubic-bezier(.2,.7,.3,1) infinite;
+}
+.viz i:nth-child(2) { animation-delay: .85s }
+.viz i:nth-child(3) { animation-delay: 1.7s }
+@keyframes ring { 0% { transform: scale(.55); opacity: .55 } 100% { transform: scale(1.25); opacity: 0 } }
+
+.bar { height: 5px; border-radius: 3px; background: oklch(0.26 0.02 258); overflow: hidden; }
+.bar > i { display: block; height: 100%; border-radius: 3px; transition: width .4s ease; }
+
+@keyframes rise { from { opacity: 0; transform: translateY(8px) } to { opacity: 1; transform: none } }
+.rise { animation: rise .22s ease-out both; }
+@keyframes breathe { 0%,100% { opacity: 1 } 50% { opacity: .45 } }
+.breathe { animation: breathe 2s ease-in-out infinite; }
 
 ::-webkit-scrollbar { width: 8px }
-::-webkit-scrollbar-thumb { background: var(--surface-03); border-radius: 4px }
+::-webkit-scrollbar-thumb { background: var(--elevated); border-radius: 4px }

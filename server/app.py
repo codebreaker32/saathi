@@ -29,7 +29,9 @@ from saathi.simulate import SCENARIO_DIR, load, run
 
 AUDIO_DIR = Path(__file__).resolve().parent.parent / ".voice-cache" / "wav"
 CONTROLS: list[dict] = []
+SESSIONS: dict[str, dict] = {}
 _render_lock = threading.Lock()
+_seq = [0]
 
 
 def prerender(frames: list[dict], profile: str | None = None) -> dict:
@@ -52,6 +54,26 @@ def prerender(frames: list[dict], profile: str | None = None) -> dict:
             print(f"  [voice] {who}: {e}", file=sys.stderr)
             failed += 1
     return {"made": made, "cached": skipped, "failed": failed}
+
+
+def _scenarios_for(line: str) -> list[dict]:
+    """Who might answer this number.
+
+    Returned as a list rather than resolved to one, because which counterparty
+    picks up is the whole variable under test -- a warm undisclosed bot and a
+    real rep answer the same number, and choosing between them is the demo.
+    """
+    out = []
+    for p in sorted(SCENARIO_DIR.glob("*.yaml")):
+        sc = load(p.stem)
+        if sc.get("line") != line:
+            continue
+        out.append({"id": p.stem,
+                    "truth": sc.get("ground_truth", {}).get("truth"),
+                    "label": p.stem.replace("_", " ")})
+    # a genuine human first: the default should be the ordinary case
+    out.sort(key=lambda s: (s["truth"] != "human", s["id"]))
+    return out
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -88,14 +110,82 @@ class Handler(BaseHTTPRequestHandler):
             return self._wav(AUDIO_DIR / Path(u.path).name)
 
         if u.path == "/api/events":
-            name = (q.get("scenario") or ["real_rep"])[0]
-            speed = float((q.get("speed") or ["40"])[0])
-            return self._sse(name, speed)
+            sid = (q.get("session") or [""])[0]
+            sess = SESSIONS.get(sid, {})
+            name = sess.get("scenario") or (q.get("scenario") or ["real_rep"])[0]
+            speed = float(sess.get("speed") or (q.get("speed") or ["10"])[0])
+            return self._sse(name, speed, sess)
 
         self.send_error(404)
 
     def do_POST(self):
         u = urlparse(self.path)
+
+        if u.path == "/api/call":
+            n = int(self.headers.get("Content-Length", 0))
+            body = json.loads(self.rfile.read(n) or b"{}")
+            _seq[0] += 1
+            sid = f"s{_seq[0]}"
+            SESSIONS[sid] = {
+                "scenario": body.get("scenario", "real_rep"),
+                "speed": float(body.get("speed", 10)),
+                "problem": body.get("problem", ""),
+                "facts": body.get("facts") or {},
+                "playbook": body.get("playbook"),
+                "mandate": body.get("mandate") or {},
+            }
+            return self._json({"session": sid})
+
+        if u.path == "/api/understand":
+            n = int(self.headers.get("Content-Length", 0))
+            text = json.loads(self.rfile.read(n) or b"{}").get("text", "")
+            from saathi.understand import understand
+            un = understand(text)
+            pb = un.playbook
+            return self._json({
+                "matched": pb is not None,
+                "confidence": un.confidence,
+                "why": un.why,
+                "playbook": pb.id if pb else None,
+                "company": pb.company if pb else None,
+                "goal": pb.goal if pb else None,
+                "scenarios": _scenarios_for(pb.line) if pb else [],
+                "facts": un.facts,
+                "will_be_asked_for": [f.field for f in pb.never_fields()] if pb else [],
+                "may_state": [f.field for f in pb.safe_fields()] if pb else [],
+            })
+
+        if u.path == "/api/mandate":
+            n = int(self.headers.get("Content-Length", 0))
+            text = json.loads(self.rfile.read(n) or b"{}").get("text", "")
+            from saathi.llm import OllamaLLM
+            from saathi.mandate import parse, render
+            from saathi.types import Mandate
+            if not text.strip():
+                return self._json({"ok": True, "readback": render(Mandate.empty()),
+                                   "mandate": {}, "needs": [], "error": None})
+            try:
+                r = parse(text, OllamaLLM(timeout=45.0))
+            except Exception as e:
+                # An unavailable parser grants NOTHING. That is the same
+                # direction ambiguity always resolves in here: less authority.
+                # Blocking the call would be worse and granting a guess would
+                # be far worse.
+                return self._json({
+                    "ok": False,
+                    "error": f"could not parse that right now ({type(e).__name__}). "
+                             f"You can still call with no authority granted.",
+                    "needs": [], "readback": render(Mandate.empty()), "mandate": {},
+                    "degraded": True,
+                })
+            return self._json({
+                "ok": r.ok,
+                "error": r.error,
+                "needs": list(r.needs),
+                "readback": render(r.mandate) if r.mandate else None,
+                "mandate": r.mandate.__dict__ if r.mandate else {},
+            })
+
         if u.path != "/api/control":
             return self.send_error(404)
         n = int(self.headers.get("Content-Length", 0))
@@ -128,13 +218,35 @@ class Handler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(raw)
 
-    def _sse(self, name: str, speed: float):
+    def _sse(self, name: str, speed: float, sess: dict | None = None):
         try:
             sc = load(name)
         except FileNotFoundError:
             return self.send_error(404, "no such scenario")
 
-        out = run(sc, sc.get("goal", ""))
+        # The brief is the ONLY channel by which the user's own words and facts
+        # reach anything the agent says. Built through the whitelist, so a
+        # credential typed into the problem box cannot travel with it.
+        brief = None
+        sess = sess or {}
+        if sess.get("playbook"):
+            try:
+                from saathi.playbook import build_brief, load_all
+                pb = load_all().get(sess["playbook"])
+                if pb:
+                    brief = build_brief(pb, sess.get("problem", ""),
+                                        sess.get("facts", {}))
+            except Exception as e:                       # never fail the call
+                print(f"  [brief] {e}", file=sys.stderr)
+
+        store = None
+        try:
+            from saathi.store import default_store
+            store = default_store()
+        except Exception:
+            store = None
+
+        out = run(sc, sc.get("goal", ""), brief=brief, store=store)
         frames = build(out, sc, speed=speed)
         stats = prerender(frames)
         print(f"  [voice] {name}: {stats}", file=sys.stderr)
