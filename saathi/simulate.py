@@ -231,13 +231,18 @@ def run(scenario: dict, goal: str, *, brief=None, verifier=None, store=None,
             prompt = node["prompt"]
             out.beats.append(Beat(clock.now_ms(), "them", prompt, "[menu]"))
             clock.advance(node.get("speak_ms", 7000))
-            # Same prompt three times means a loop. Escalating beats pressing
-            # the same wrong digit forever, and staying silent is the rung that
+            # A prompt heard twice is a loop. Escalating beats pressing the
+            # same wrong digit forever, and staying silent is the rung that
             # actually works -- many systems route no-input callers to a human.
+            #
+            # This used to wait for the THIRD hearing, which meant the second
+            # visit pressed "repeat these options" on a menu already parsed and
+            # replayed it for nothing. choose() now refuses that, so the ladder
+            # has to take over one rung earlier or the call just stalls.
             fp = " ".join(prompt.lower().split())
             seen_prompts[fp] = seen_prompts.get(fp, 0) + 1
-            if seen_prompts[fp] >= 3:
-                rung = "0" if seen_prompts[fp] == 3 else None
+            if seen_prompts[fp] >= 2:
+                rung = "0" if seen_prompts[fp] == 2 else None
                 if rung:
                     out.beats.append(Beat(clock.now_ms(), "saathi", "presses 0",
                                           "stuck: escalating to an operator"))
@@ -257,7 +262,8 @@ def run(scenario: dict, goal: str, *, brief=None, verifier=None, store=None,
             acc.phase = LineState.IVR
             acc.add(lexical.observe(prompt, clock.now_ms()))
             acc.add(rep.observe(prompt, clock.now_ms(), node.get("speak_ms", 7000)))
-            digit, why = choose(options, goal)
+            digit, why = choose(options, goal,
+                                heard_before=seen_prompts[fp] > 1)
             if digit is None:
                 out.beats.append(Beat(clock.now_ms(), "saathi", "(waiting)", why))
                 node_id = node.get("on_timeout")

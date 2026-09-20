@@ -95,10 +95,18 @@ def _matches_any(word: str, pool: set[str]) -> bool:
     return False
 
 
-def choose(options: tuple[Option, ...], goal: str, *, margin: float = 0.15
-           ) -> tuple[str | None, str]:
+def choose(options: tuple[Option, ...], goal: str, *, margin: float = 0.15,
+           heard_before: bool = False) -> tuple[str | None, str]:
     """Abstain unless one option wins by a margin. On a tie, prefer the
-    reversible option -- preserving optionality beats guessing."""
+    reversible option -- preserving optionality beats guessing.
+
+    `heard_before` says this exact menu has already been parsed. It gates the
+    "repeat these options" escape hatch, because pressing repeat on a menu you
+    have ALREADY HEARD cannot produce new options -- it replays a prompt whose
+    every branch you have scored. Reversibility is worth something the first
+    time and is a pure loop the second: on a real line each pointless replay
+    costs the caller fifteen seconds of the same recording.
+    """
     candidates = [o for o in options if o.risk not in
                   (Risk.ACTION_VERB, Risk.ABSORBING)]
     if not candidates:
@@ -118,8 +126,11 @@ def choose(options: tuple[Option, ...], goal: str, *, margin: float = 0.15
     top, best = scored[0]
     if top <= 0.0:
         rev = [o for _, o in scored if o.risk is Risk.SAFE_REVERSIBLE]
-        if rev:
+        if rev and not heard_before:
             return rev[0].digit, f"nothing matched; taking reversible '{rev[0].label}'"
+        if rev:
+            return None, ("nothing matched, and repeating a menu we have already "
+                          "heard cannot reveal an option it did not have")
         return None, "nothing matched and no reversible option"
     if len(scored) > 1 and top - scored[1][0] < margin:
         return None, (f"'{best.label}' and '{scored[1][1].label}' are too close "
