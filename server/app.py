@@ -14,6 +14,7 @@ pretending an eleven-minute hold took eleven minutes.
 from __future__ import annotations
 
 import json
+import os
 import sys
 import dataclasses
 import threading
@@ -418,8 +419,14 @@ class Handler(BaseHTTPRequestHandler):
 
 def main():
     port = int(sys.argv[1]) if len(sys.argv) > 1 else 8787
-    srv = ThreadingHTTPServer(("127.0.0.1", port), Handler)
-    print(f"saathi stream on http://127.0.0.1:{port}")
+    # Loopback by DEFAULT, because a dev box should not publish itself to the
+    # network by accident. On a deployed host nothing outside the machine can
+    # reach a loopback socket, so SAATHI_BIND=0.0.0.0 is required there -- the
+    # service comes up, the port refuses every external connection, and it
+    # looks exactly like a crashed process.
+    host = os.environ.get("SAATHI_BIND", "127.0.0.1").strip() or "127.0.0.1"
+    srv = ThreadingHTTPServer((host, port), Handler)
+    print(f"saathi stream on http://{host}:{port}")
     print(f"  scenarios  http://127.0.0.1:{port}/api/scenarios")
     print(f"  stream     http://127.0.0.1:{port}/api/events?scenario=real_rep&speed=40")
     try:
