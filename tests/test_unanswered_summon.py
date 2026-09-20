@@ -86,13 +86,45 @@ def test_a_second_timeout_cannot_speak_twice():
 # What gets said
 # --------------------------------------------------------------------------- #
 
-def test_authority_is_stated_as_the_frozen_numbers():
-    """The demand comes from the mandate FIELDS, not from the sentence the user
-    typed -- which does not travel with the session, so there is nothing here a
-    rep can argue with."""
-    _, cmds = step(_summoning(), SummonTimeout(t_ms=1))
-    text = [c.text for c in cmds if isinstance(c, Speak)][0]
-    assert "400" in text and "isn't picking up" in text
+def test_the_rep_is_told_what_is_wanted_and_never_the_floor():
+    """THE LEAK TEST, and it guards an invariant stated on Mandate itself:
+    "What the agent may ACCEPT. Never what it may REVEAL -- that axis is zero."
+
+    An earlier version filled this line from render(), the USER-facing read-back,
+    and announced "accept a refund of Rs 4,000 or more; nothing else, and
+    anything lower comes back to you" to the counterparty. Beyond the invariant,
+    it guarantees an offer of exactly the floor and teaches the rep how to force
+    an escalation.
+
+    Proves: no digit from the mandate reaches the utterance, at any value.
+    Does NOT prove: that the rep behaves better for not knowing. Nothing here
+    models a negotiation.
+    """
+    for paise in (1, 40_000, 99_900, 400_000, 12_345_600):
+        s = SessionState(mandate=Mandate(accept_refund_min_paise=paise),
+                         line=LineState.ENGAGED, presence=UserPresence.SUMMONING)
+        _, cmds = step(s, SummonTimeout(t_ms=1))
+        text = [c.text for c in cmds if isinstance(c, Speak)][0]
+        assert "isn't picking up" in text
+        assert "refund" in text, "the ASK must still be stated"
+        assert not any(ch.isdigit() for ch in text), f"leaked a figure: {text}"
+
+
+def test_the_leak_test_has_teeth():
+    """MUTATION CONTROL. render() is the read-back that DOES carry figures. If
+    formatting the clip with it no longer trips the assertion above, that
+    assertion has stopped guarding anything."""
+    from saathi.mandate import render
+    leaky = clips.STATE_DEMAND.replace("{wanted}", "{demand}").format(
+        demand=render(Mandate(accept_refund_min_paise=400_000)))
+    assert any(ch.isdigit() for ch in leaky)
+
+
+def test_what_the_user_sees_still_carries_the_figures():
+    """The read-back must NOT be weakened by fixing the leak: the user has to
+    see the numbers they are granting."""
+    from saathi.mandate import render
+    assert "400" in render(Mandate(accept_refund_min_paise=40_000))
 
 
 def test_with_no_authority_it_only_asks_for_a_callback():
@@ -102,15 +134,16 @@ def test_with_no_authority_it_only_asks_for_a_callback():
     assert text == clips.CALLBACK_REQUEST
 
 
-def test_it_does_not_concede_a_callback_before_the_agent_replies():
-    """MUTATION CONTROL for a wording bug that looked harmless. Emitting
-    CaptureCallback alongside a DEMAND made the summary report "callback
-    requested" on a call where Saathi had actually asked for money and was
-    waiting for an answer."""
-    _, cmds = step(_summoning(), SummonTimeout(t_ms=1))
-    assert not any(type(c).__name__ == "CaptureCallback" for c in cmds)
-    _, empty = step(_summoning(Mandate.empty()), SummonTimeout(t_ms=1))
-    assert any(type(c).__name__ == "CaptureCallback" for c in empty)
+@pytest.mark.parametrize("mandate", [AUTHORITY, Mandate.empty()])
+def test_a_callback_is_requested_whether_or_not_authority_was_granted(mandate):
+    """Missing the call is the trigger, not the absence of a mandate.
+
+    An earlier version raised the callback only on the no-authority branch, so
+    it was skipped on exactly the calls where the user had engaged most -- they
+    granted authority, missed the call, and got no callback arranged.
+    """
+    _, cmds = step(_summoning(mandate), SummonTimeout(t_ms=1))
+    assert any(type(c).__name__ == "CaptureCallback" for c in cmds)
 
 
 # --------------------------------------------------------------------------- #

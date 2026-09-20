@@ -112,6 +112,43 @@ def main(argv=None) -> int:
             made += m; cached += c; failed += f
             print(f"    {n:22s} {m} rendered, {c} already cached"
                   + (f", {f} FAILED" if f else ""))
+        # The unanswered-summon line is not reachable by replaying a scenario:
+        # warm runs them with NO mandate, so only the callback branch is ever
+        # spoken. Its key space is small and knowable -- mandate.wanted() yields
+        # kinds only, so fifteen combinations cover every sentence that clip can
+        # produce -- and enumerating them is what keeps it from being silent on
+        # a real call. The floor is never in the text, which is exactly why this
+        # is finite.
+        from itertools import combinations
+        from saathi import clips
+        from saathi.frames import audio_id
+        from saathi.mandate import wanted
+        from saathi.types import Mandate
+        fields = ("accept_refund_min_paise", "accept_credit_min_paise",
+                  "accept_redelivery", "accept_replacement")
+        phrasings = {wanted(Mandate.empty())}
+        for n in range(1, len(fields) + 1):
+            for combo in combinations(fields, n):
+                kw = {f: (1 if f.endswith("paise") else True) for f in combo}
+                phrasings.add(wanted(Mandate(**kw)))
+        dm = dc = 0
+        for w in sorted(phrasings):
+            text = clips.STATE_DEMAND.format(wanted=w)
+            dest = V.CACHE / "wav" / f"{audio_id(text, 'saathi')}.wav"
+            if dest.exists():
+                dc += 1
+                continue
+            try:
+                dest.parent.mkdir(parents=True, exist_ok=True)
+                V.write_wav(dest, [V.synthesize(text, "saathi", profile=args.profile)])
+                dm += 1
+            except Exception as e:
+                print(f"    demand line: {e}")
+                failed += 1
+        made += dm
+        cached += dc
+        print(f"    unanswered-summon    {dm} rendered, {dc} already cached")
+
         print(f"\n  done: {made} rendered, {cached} cached, {failed} failed")
         print(f"  audio lives in {V.CACHE}/wav (gitignored -- copy it to skip this)\n")
         return 1 if failed else 0

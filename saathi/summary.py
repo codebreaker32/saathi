@@ -187,11 +187,23 @@ def next_actions(outcome) -> list[dict]:
         # A fetch means SUMMONED, not answered. Reporting "you took the call" to
         # someone who never picked it up would be the summary telling them their
         # own history wrong.
+        #
+        # And a summon is not always a person: the reducer also rings you when
+        # an OFFER falls outside your grant, which happens on machine calls with
+        # no mandate at all. Saying "Saathi found a person" there contradicted
+        # the scoreboard, which scored the same call "correctly held", on calls
+        # whose entire purpose is proving a human did NOT answer.
+        found_a_person = outcome.fetched_at_ms is not None
         acts.append(NextAction(
             id="missed_it",
             label="You missed this one",
-            detail="Saathi found a person, rang you, and carried on when you did not "
-                   "answer. Everything below is what happened while you were away.",
+            detail=("Saathi found a person, rang you, and carried on when you did "
+                    "not answer. Everything below is what happened while you were "
+                    "away."
+                    if found_a_person else
+                    "Saathi rang you because something needed your decision, and "
+                    "carried on when you did not answer. It was a machine on the "
+                    "line throughout -- no person ever answered."),
         ))
     elif outcome.fetched_at_ms is not None:
         acts.append(NextAction(

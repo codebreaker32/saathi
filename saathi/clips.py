@@ -21,15 +21,22 @@ VERIFY_HANDOFF = (
 construction: the credential was never loaded."""
 
 STATE_DEMAND = (
-    "My user isn't picking up, so let me tell you what they authorised. "
-    "They will {demand}. Can you do that?"
+    "My user isn't picking up. What they're asking for is {wanted}. "
+    "What can you do for them?"
 )
 """Said when the summon goes unanswered and the user DID grant authority.
 
-`{demand}` is filled from mandate.render(), which reads the FROZEN FIELDS and
-nothing else. That is what keeps this a fixed clip rather than model output: the
-sentence the user typed does not travel with the session, so there is no wording
-here for a rep to argue with -- only the numbers they already agreed to.
+`{wanted}` comes from mandate.wanted(), which yields KINDS ONLY -- "a refund",
+"a redelivery" -- and never an amount. The first version filled it from
+render() instead and announced the floor to the rep:
+
+    "They will accept a refund of Rs 4,000 or more; nothing else, and
+     anything lower comes back to you."
+
+That violated the invariant on Mandate verbatim ("Never what it may REVEAL --
+that axis is zero"), guaranteed an offer of exactly the floor, and told the rep
+how to force an escalation. It was also permanently silent, because clip ids
+are content hashes and the amount made the key space unbounded.
 
 Never spoken if the user joined. The reducer gates it on presence still being
 SUMMONING, so a takeover a moment earlier silences it by construction.

@@ -103,6 +103,39 @@ def render(m: Mandate) -> str:
             + "; nothing else, and anything lower comes back to you")
 
 
+_WANTED = (
+    ("accept_refund_min_paise", "a refund"),
+    ("accept_credit_min_paise", "store credit"),
+    ("accept_redelivery", "a redelivery"),
+    ("accept_replacement", "a replacement"),
+)
+
+
+def wanted(m: Mandate) -> str:
+    """WHAT the user is asking for. NEVER what they would settle for.
+
+    render() is the read-back: it exists to show the USER what they authorised,
+    and it names the floors. This is the opposite direction -- it is the only
+    thing that may be said to the counterparty, so it carries KINDS and no
+    amounts at all.
+
+    The distinction is the invariant on Mandate itself: "What the agent may
+    ACCEPT. Never what it may REVEAL -- that axis is zero." Announcing a floor
+    also guarantees you are offered exactly the floor, and "anything lower
+    comes back to you" would teach a rep how to force an escalation.
+
+    Bounded output by construction: four kinds, so at most fifteen sentences,
+    which is a key space the audio cache can actually hold. An amount would
+    make it unbounded and every such line would be silent.
+    """
+    parts = [label for field, label in _WANTED if getattr(m, field, None)]
+    if not parts:
+        return "the problem put right"
+    if len(parts) == 1:
+        return parts[0]
+    return ", ".join(parts[:-1]) + " or " + parts[-1]
+
+
 # --------------------------------------------------------------------------- #
 # Authoring-time parse -- runs once, never during a call
 # --------------------------------------------------------------------------- #

@@ -233,16 +233,16 @@ def _summon_timeout(s: SessionState, e: SummonTimeout):
     if s.line is not LineState.ENGAGED:
         return s, []
 
-    from saathi.mandate import render
+    from saathi.mandate import wanted
     if s.mandate is not None and not s.mandate.is_empty():
-        # There is something to negotiate, so state it and wait for an answer.
-        # Asking for a callback HERE would be wrong: it concedes before the
-        # agent has said anything, and the summary would claim a callback was
-        # requested when what actually happened was a demand.
-        return s, [Speak(text=clips.STATE_DEMAND.format(demand=render(s.mandate)),
-                         purpose="explain")]
-    return s, [Speak(text=clips.CALLBACK_REQUEST, purpose="explain"),
-               CaptureCallback()]
+        text = clips.STATE_DEMAND.format(wanted=wanted(s.mandate))
+    else:
+        text = clips.CALLBACK_REQUEST
+    # A callback is wanted on BOTH branches. The user asked for the problem to
+    # be registered and a callback arranged whenever they miss the call, and an
+    # earlier version raised it only when no authority had been granted -- so
+    # it was skipped on exactly the calls where the user had engaged most.
+    return s, [Speak(text=text, purpose="explain"), CaptureCallback()]
 
 
 def _remote_hungup(s: SessionState, e: RemoteHungUp):
