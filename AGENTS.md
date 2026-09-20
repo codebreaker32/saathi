@@ -96,13 +96,9 @@ already bit us once.
   decision where latency is trust.
 - `server/app.py` — SSE on the stdlib, not a WebSocket. The stream is one-way and
   the controls are four buttons.
-- `web/app/page.tsx` — a **three-pane inbox** in the shape of a help desk: a rail
-  of folders (Happening now / Needs you / Reached a person / Held), a list of
-  calls, and a threaded view with a context sidebar. Deliberately one component
-  rather than routes, because the SSE connection and detector state must survive
-  across call → verification → handoff → outcome, which is one continuous call.
-  `GET /api/calls` backs the list; sessions are in-memory, so transcripts do not
-  survive a server restart, only outcomes do.
+- `web/app/page.tsx` — a five-stage flow, not routes. The SSE connection and
+  detector state must survive across call → verification → handoff → summary,
+  which is one continuous call.
 
 ## Traps already hit — please don't re-lay them
 

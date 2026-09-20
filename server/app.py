@@ -96,23 +96,6 @@ class Handler(BaseHTTPRequestHandler):
         u = urlparse(self.path)
         q = parse_qs(u.query)
 
-        if u.path == "/api/calls":
-            # Newest first. A live call has no outcome yet, which is what the
-            # list uses to tell "happening now" from "happened".
-            out = []
-            for sid, sess in sorted(SESSIONS.items(), key=lambda kv: -int(kv[0][1:])):
-                o = sess.get("outcome")
-                out.append({
-                    "id": sid,
-                    "company": sess.get("company") or "—",
-                    "problem": (sess.get("problem") or "").strip()[:120],
-                    "scenario": sess.get("scenario"),
-                    "started_at": sess.get("started_at"),
-                    "state": sess.get("state", "queued"),
-                    "outcome": o,
-                })
-            return self._json(out)
-
         if u.path == "/api/scenarios":
             items = []
             for p in sorted(SCENARIO_DIR.glob("*.yaml")):
@@ -149,11 +132,7 @@ class Handler(BaseHTTPRequestHandler):
                 "problem": body.get("problem", ""),
                 "facts": body.get("facts") or {},
                 "playbook": body.get("playbook"),
-                "company": body.get("company"),
                 "mandate": body.get("mandate") or {},
-                "started_at": time.time(),
-                "state": "queued",
-                "outcome": None,
             }
             return self._json({"session": sid})
 
@@ -283,23 +262,9 @@ class Handler(BaseHTTPRequestHandler):
         self.send_header("X-Accel-Buffering", "no")
         self.end_headers()
 
-        if sess:
-            sess["state"] = "live"
         t0 = time.monotonic()
         try:
             for f in frames:
-                if sess and f["type"] == "ended":
-                    sess["state"] = ("needs_you" if f.get("handed_off")
-                                     else "done" if f.get("fetched")
-                                     else "held")
-                    sess["outcome"] = {
-                        "truth": f.get("truth"), "fetched": f.get("fetched"),
-                        "fetched_at_ms": f.get("fetched_at_ms"),
-                        "handed_off": f.get("handed_off"),
-                        "false_fetch": f.get("false_fetch"),
-                        "families": f.get("families"), "probes": f.get("probes"),
-                        "duration_ms": f.get("call_ms"),
-                    }
                 due = t0 + (f["call_ms"] / 1000.0) / speed
                 delay = due - time.monotonic()
                 if delay > 0:
